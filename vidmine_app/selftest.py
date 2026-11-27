@@ -174,8 +174,16 @@ def run_whisper(app, out_path: Path, video: Path) -> int:
         cfg.library_dir = tmp / "library"
         cfg.whisper.model = "tiny"
 
-        sizes = {n: sum(s for _, s in transcribe.model_files(n)) for n in ("large-v3", "large-v3-turbo")}
-        step("model sources", mb={k: round(v / 1e6) for k, v in sizes.items()})
+        sources, bad = {}, []
+        for n in ("large-v3", "large-v3-turbo"):
+            try:
+                sources[n] = {p: round(sz / 1e6) for p, sz in transcribe.model_files(n)}
+            except Exception as e:
+                sources[n] = f"ERROR {e}"
+                bad.append(n)
+        step("model sources", mb=sources)
+        if bad:
+            raise AssertionError(f"model downloads not available: {bad}")
         wheels = transcribe.cuda_wheels()
         step("cuda sources", wheels=[(p, u.rsplit("/", 1)[-1], round(s / 1e6)) for p, u, s in wheels],
              total_mb=round(sum(s for _, _, s in wheels) / 1e6))

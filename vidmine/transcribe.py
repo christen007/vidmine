@@ -14,6 +14,7 @@ import re
 import sys
 import tempfile
 import threading
+import urllib.error
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -29,7 +30,6 @@ MODELS = {
     "large-v3-turbo": "mobiuslabs/faster-whisper-large-v3-turbo",
     "tiny": "Systran/faster-whisper-tiny",  # used by the build self-test
 }
-MODEL_FILES = re.compile(r"^(config\.json|preprocessor_config\.json|model\.bin|tokenizer\.json|vocabulary\.\w+)$")
 # NVIDIA libraries needed by CTranslate2 4.x on Windows: package -> required major version.
 CUDA_PACKAGES = {
     "nvidia-cublas-cu12": "12",
@@ -116,12 +116,36 @@ def _download(url: str, dest: Path, on_bytes: Callable[[int], None], cancel: thr
     os.replace(tmp, dest)
 
 
+MODEL_CANDIDATES = ["config.json", "model.bin", "preprocessor_config.json", "tokenizer.json",
+                    "vocabulary.json", "vocabulary.txt"]
+
+
+def _head_size(url: str) -> int | None:
+    """Size of a download, or None if the file doesn't exist (404)."""
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "VidMine"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return int(r.headers.get("X-Linked-Size") or r.headers.get("Content-Length") or 0)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
+
+
+def model_url(name: str, path: str) -> str:
+    return f"https://huggingface.co/{MODELS[name]}/resolve/main/{path}"
+
+
 def model_files(name: str) -> list[tuple[str, int]]:
     """(path, size) of the files to download for a model."""
-    repo = MODELS[name]
-    tree = _get_json(f"https://huggingface.co/api/models/{repo}/tree/main")
-    return [(f["path"], int(f.get("size") or 0)) for f in tree
-            if f.get("type") == "file" and MODEL_FILES.match(f["path"])]
+    files = []
+    for path in MODEL_CANDIDATES:
+        size = _head_size(model_url(name, path))
+        if size is not None:
+            files.append((path, size))
+    if not any(p == "model.bin" for p, _ in files):
+        raise RuntimeError(f"Whisper model {name} wasn't found on Hugging Face")
+    return files
 
 
 def cuda_wheels(packages: dict[str, str] | None = None) -> list[tuple[str, str, int]]:
@@ -157,8 +181,6 @@ class _Meter:
 
 def download_model(name: str, progress: Progress | None = None, cancel: threading.Event | None = None) -> Path:
     files = model_files(name)
-    if not any(p == "model.bin" for p, _ in files):
-        raise RuntimeError(f"Model {name} has no model.bin")
     dest = model_path(name)
     dest.mkdir(parents=True, exist_ok=True)
     meter = _Meter(sum(s for _, s in files), f"Downloading Whisper {name}", progress)
@@ -167,7 +189,7 @@ def download_model(name: str, progress: Progress | None = None, cancel: threadin
         if target.exists() and size and target.stat().st_size == size:
             meter(size)
             continue
-        _download(f"https://huggingface.co/{MODELS[name]}/resolve/main/{path}", target, meter, cancel)
+        _download(model_url(name, path), target, meter, cancel)
     (dest / ".complete").write_text("ok", encoding="utf-8")
     return dest
 

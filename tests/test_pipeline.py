@@ -234,9 +234,10 @@ def test_whisper_download_helpers(tmp_path, monkeypatch):
         "10.0.0": [{"filename": "nvidia_cudnn_cu12-10.0.0-py3-none-win_amd64.whl", "url": "u10", "size": 9}],
         "9.11.0rc1": [{"filename": "nvidia_cudnn_cu12-9.11.0rc1-py3-none-win_amd64.whl", "url": "rc", "size": 9}],
     }}
-    tree = [{"type": "file", "path": p, "size": 3} for p in
-            ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt", "README.md", ".gitattributes")]
-    monkeypatch.setattr(transcribe, "_get_json", lambda url: pypi if "pypi" in url else tree)
+    present = {"config.json", "model.bin", "tokenizer.json", "vocabulary.txt"}
+    monkeypatch.setattr(transcribe, "_get_json", lambda url: pypi)
+    monkeypatch.setattr(transcribe, "_head_size",
+                        lambda url: 3 if url.rsplit("/", 1)[-1] in present else None)
     assert transcribe.cuda_wheels({"nvidia-cudnn-cu12": "9"}) == [("nvidia-cudnn-cu12", "https://x/u910", 7)]
     assert sorted(p for p, _ in transcribe.model_files("tiny")) == \
         ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
