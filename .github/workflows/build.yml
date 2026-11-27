@@ -64,7 +64,8 @@ jobs:
         shell: pwsh
         run: |
           $env:VIDMINE_SCREENSHOTS = "$PWD\screenshots"
-          $env:VIDMINE_SCREENSHOT_PREFIX = "native_"
+          $env:VIDMINE_SCREENSHOT_PREFIX = "native200_"
+          $env:QT_SCALE_FACTOR = "2"   # like a high-resolution laptop screen
           $p = Start-Process -FilePath dist\VidMine\VidMine.exe -ArgumentList '--selftest', "`"$PWD\native.json`"" -PassThru
           if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Output "timed out" }
           if (Test-Path native.json) { Get-Content native.json -Raw | Select-String -Pattern '"ok"|"error"' }

@@ -10,7 +10,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-VERSION = "3"
+VERSION = "4"
 FACE, LIGHT, WHITE, SHADOW, BLACK = "#c0c0c0", "#dfdfdf", "#ffffff", "#808080", "#000000"
 NAVY = "#000080"
 
@@ -173,12 +173,21 @@ def _all_images() -> dict[str, Image.Image]:
     return imgs
 
 
+# Images used as border-images (9-slice bevels). Qt measures their slices in image pixels,
+# so they must not get automatic @2x variants: we make one copy per display scale instead.
+BORDER_IMAGES = {"raised", "pressed", "window", "field", "fieldface", "thin", "tab"}
+
+
 def build_assets(dest: Path | None = None) -> Path:
     dest = dest or assets_dir()
     if (dest / ".done").exists():
         return dest
     dest.mkdir(parents=True, exist_ok=True)
     for name, im in _all_images().items():
+        if name in BORDER_IMAGES:
+            for k in (1, 2, 3, 4):
+                im.resize((im.width * k, im.height * k), Image.NEAREST).save(dest / f"{name}_x{k}.png")
+            continue
         im.save(dest / f"{name}.png")
         for k in (2, 3):  # crisp high-DPI variants, picked up automatically by Qt
             im.resize((im.width * k, im.height * k), Image.NEAREST).save(dest / f"{name}@{k}x.png")
@@ -188,12 +197,18 @@ def build_assets(dest: Path | None = None) -> Path:
 
 # ---- style sheet ---------------------------------------------------------------------------
 
-def stylesheet(a: Path) -> str:
+def stylesheet(a: Path, k: int = 1) -> str:
+    """k = display scale (1 at 100%, 2 at 200%...): bevel images and their slices match it."""
     u = lambda n: f"url({(a / (n + '.png')).as_posix()})"  # noqa: E731
-    raised = f"border-image: {u('raised')} 2 2 2 2 stretch stretch; border-width: 2px;"
-    pressed = f"border-image: {u('pressed')} 2 2 2 2 stretch stretch; border-width: 2px;"
-    field = f"border-image: {u('field')} 2 2 2 2 stretch stretch; border-width: 2px;"
-    window = f"border-image: {u('window')} 2 2 2 2 stretch stretch; border-width: 2px;"
+
+    def bi(name: str, top=2, right=2, bottom=2, left=2) -> str:
+        url = (a / f"{name}_x{k}.png").as_posix()
+        return f"url({url}) {top * k} {right * k} {bottom * k} {left * k} stretch stretch"
+
+    raised = f"border-image: {bi('raised')}; border-width: 2px;"
+    pressed = f"border-image: {bi('pressed')}; border-width: 2px;"
+    field = f"border-image: {bi('field')}; border-width: 2px;"
+    window = f"border-image: {bi('window')}; border-width: 2px;"
     return f"""
 * {{ color: black; }}
 QMainWindow, QDialog, QWidget#body95 {{ background: {FACE}; }}
@@ -248,7 +263,7 @@ QRadioButton::indicator {{ width: 12px; height: 12px; image: {u('radio_off')}; }
 QRadioButton::indicator:checked {{ image: {u('radio_on')}; }}
 
 QTabWidget::pane {{ {window} background: {FACE}; top: -2px; }}
-QTabBar::tab {{ border-image: {u('tab')} 2 2 0 2 stretch stretch; border-width: 2px 2px 0 2px;
+QTabBar::tab {{ border-image: {bi('tab', 2, 2, 0, 2)}; border-width: 2px 2px 0 2px;
     background: {FACE}; padding: 3px 12px 3px 12px; margin-top: 2px; }}
 QTabBar::tab:selected {{ margin-top: 0; padding-bottom: 5px; margin-left: -2px; margin-right: -2px; }}
 QTabBar::tab:first:selected {{ margin-left: 0; }}
@@ -270,17 +285,17 @@ QScrollBar::left-arrow {{ image: {u('arrow_left')}; width: 4px; height: 7px; }}
 QScrollBar::right-arrow {{ image: {u('arrow_right')}; width: 4px; height: 7px; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: none; }}
 
-QSlider::groove:horizontal {{ border-image: {u('fieldface')} 2 2 2 2 stretch stretch; border-width: 2px; height: 0px; }}
+QSlider::groove:horizontal {{ border-image: {bi('fieldface')}; border-width: 2px; height: 0px; }}
 QSlider::handle:horizontal {{ {raised} background: {FACE}; width: 7px; margin: -9px 0; }}
 QSlider::handle:horizontal:pressed {{ {raised} }}
 
-QProgressBar {{ border-image: {u('fieldface')} 2 2 2 2 stretch stretch; border-width: 2px;
+QProgressBar {{ border-image: {bi('fieldface')}; border-width: 2px;
     background: {FACE}; text-align: center; min-height: 14px; }}
 QProgressBar::chunk {{ background: {NAVY}; width: 8px; margin: 1px; }}
 
 QStatusBar {{ background: {FACE}; padding: 1px 2px; }}
 QStatusBar::item {{ border: none; }}
-QLabel#panel95 {{ border-image: {u('thin')} 1 1 1 1 stretch stretch; border-width: 1px; padding: 1px 4px; }}
+QLabel#panel95 {{ border-image: {bi('thin', 1, 1, 1, 1)}; border-width: 1px; padding: 1px 4px; }}
 
 QFrame#video95 {{ {field} background: black; }}
 QSplitter::handle {{ background: {FACE}; }}
@@ -311,7 +326,9 @@ def apply(app) -> None:
                     (QPalette.Dark, SHADOW), (QPalette.Shadow, BLACK)):
         pal.setColor(role, QColor(c))
     app.setPalette(pal)
-    app.setStyleSheet(stylesheet(a))
+    screen = app.primaryScreen()
+    k = max(1, min(4, round(screen.devicePixelRatio()))) if screen else 1
+    app.setStyleSheet(stylesheet(a, k))
     _active = True
 
 
