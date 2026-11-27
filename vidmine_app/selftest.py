@@ -139,7 +139,7 @@ def run(app, out_path: Path) -> int:
         step("export", files=len(names))
         shots = os.environ.get("VIDMINE_SCREENSHOTS")
         if shots:
-            take_screenshots(win, cfg, Path(shots))
+            take_screenshots(win, cfg, Path(shots), os.environ.get("VIDMINE_SCREENSHOT_PREFIX", ""))
             step("screenshots", files=sorted(p.name for p in Path(shots).glob("*.png")))
         result["ok"] = True
     except Exception:
@@ -255,7 +255,7 @@ def run_whisper(app, out_path: Path, video: Path) -> int:
     return 0 if result["ok"] else 1
 
 
-def take_screenshots(win, cfg, d: Path) -> None:
+def take_screenshots(win, cfg, d: Path, prefix: str = "") -> None:
     """Save pictures of the main window, menus and dialogs (for checking the look on the build machine)."""
     from PySide6.QtCore import QCoreApplication, QPoint, QTimer
     from PySide6.QtWidgets import QApplication, QMenuBar
@@ -275,35 +275,35 @@ def take_screenshots(win, cfg, d: Path) -> None:
     win.activateWindow()
     win.tabs.setCurrentIndex(0)
     settle()
-    win.grab().save(str(d / "1_main_lines.png"))
+    win.grab().save(str(d / (prefix + "1_main_lines.png")))
     win.tabs.setCurrentIndex(1)
     win.card_list.setCurrentRow(0)
     settle()
-    win.grab().save(str(d / "2_main_cards.png"))
+    win.grab().save(str(d / (prefix + "2_main_cards.png")))
 
     bar = win.findChild(QMenuBar)
     if bar is not None:
         m = bar.actions()[0].menu()
         m.popup(win.mapToGlobal(QPoint(10, 40)))
         settle()
-        m.grab().save(str(d / "3_menu_file.png"))
+        m.grab().save(str(d / (prefix + "3_menu_file.png")))
         m.close()
 
     s = SettingsDialog(cfg, win)
     s.show()
     settle()
-    s.grab().save(str(d / "4_settings.png"))
+    s.grab().save(str(d / (prefix + "4_settings.png")))
     s.close()
     w = WhisperSetupDialog("large-v3", True, True, True, lambda n: False, win)
     w.show()
     settle()
-    w.grab().save(str(d / "5_whisper.png"))
+    w.grab().save(str(d / (prefix + "5_whisper.png")))
     w.close()
 
     def grab_box():
         for t in QApplication.topLevelWidgets():
             if isinstance(t, Dialog95) and t.isVisible():
-                t.grab().save(str(d / "6_message.png"))
+                t.grab().save(str(d / (prefix + "6_message.png")))
                 t.reject()
                 return
         QTimer.singleShot(200, grab_box)

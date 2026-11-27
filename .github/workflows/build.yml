@@ -48,6 +48,7 @@ jobs:
           $out = "$PWD\selftest.json"
           $env:QT_QPA_PLATFORM = "offscreen"
           $env:VIDMINE_SCREENSHOTS = "$PWD\screenshots"
+          $env:QT_QPA_FONTDIR = "C:\Windows\Fonts"
           $p = Start-Process -FilePath dist\VidMine\VidMine.exe -ArgumentList '--selftest', "`"$out`"" -Wait -PassThru
           if (Test-Path $out) { $json = Get-Content $out -Raw } else { $json = "no selftest.json written" }
           Write-Output $json
@@ -57,6 +58,16 @@ jobs:
             Write-Output ("::error title=Self-test failed (exit $($p.ExitCode))::" + ($json -replace "`r?`n", '%0A'))
             exit 1
           }
+
+      - name: Screenshots in a normal window (best effort)
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $env:VIDMINE_SCREENSHOTS = "$PWD\screenshots"
+          $env:VIDMINE_SCREENSHOT_PREFIX = "native_"
+          $p = Start-Process -FilePath dist\VidMine\VidMine.exe -ArgumentList '--selftest', "`"$PWD\native.json`"" -PassThru
+          if (-not $p.WaitForExit(180000)) { $p.Kill(); Write-Output "timed out" }
+          if (Test-Path native.json) { Get-Content native.json -Raw | Select-String -Pattern '"ok"|"error"' }
 
       - name: Publish screenshots for review (branch ci-screenshots)
         if: always()
