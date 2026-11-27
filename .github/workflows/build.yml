@@ -58,13 +58,20 @@ jobs:
             exit 1
           }
 
-      - uses: actions/upload-artifact@v5
+      - name: Publish screenshots for review (branch ci-screenshots)
         if: always()
-        with:
-          name: screenshots
-          path: screenshots
-          retention-days: 7
-          if-no-files-found: ignore
+        shell: pwsh
+        run: |
+          if (!(Test-Path screenshots)) { exit 0 }
+          $d = "$env:RUNNER_TEMP\shots"
+          git worktree add --detach $d
+          Set-Location $d
+          git checkout -q --orphan ci-screenshots
+          git rm -rf -q .
+          Copy-Item "$env:GITHUB_WORKSPACE\screenshots\*.png" .
+          git add *.png
+          git -c user.name=ci -c user.email=ci@users.noreply.github.com commit -qm "Screenshots from build ${{ github.run_number }}"
+          git push -q -f origin HEAD:ci-screenshots
 
       - name: Self-test Whisper (speech recognition)
         shell: pwsh
