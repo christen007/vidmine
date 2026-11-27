@@ -338,6 +338,7 @@ class MainWindow(FrameMixin, QMainWindow):
         self.card_list.currentItemChanged.connect(lambda *_: self.show_card())
         self.preview = QTextBrowser()
         self.preview.setOpenExternalLinks(False)
+        self.preview.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         split = QSplitter(Qt.Vertical)
         split.addWidget(self.card_list)
         split.addWidget(self.preview)
@@ -354,6 +355,8 @@ class MainWindow(FrameMixin, QMainWindow):
         row.addStretch(1)
         cp.addLayout(row)
         self.tabs.addTab(cards_page, "Cards")
+        # re-fit the preview picture once the Cards tab (and its real width) is visible
+        self.tabs.currentChanged.connect(lambda i: QTimer.singleShot(0, self.show_card) if i == 1 else None)
 
         self.splitter = QSplitter(Qt.Horizontal)
         self.splitter.addWidget(left)
@@ -702,7 +705,7 @@ class MainWindow(FrameMixin, QMainWindow):
         if not card:
             self.preview.setHtml("<p style='color:#888'>Mined cards appear here. Select one to preview it.</p>")
             return
-        width = max(240, self.preview.viewport().width() - 30)
+        width = max(200, min(self.preview.viewport().width(), self.preview.width()) - 34)
         self.preview.setHtml(card_html(card, self.library().root, width))
 
     def play_card_audio(self):
