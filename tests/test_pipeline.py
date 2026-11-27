@@ -1,0 +1,222 @@
+"""End-to-end tests with a synthetic video. Run: python -m pytest tests"""
+import json
+import shutil
+import subprocess
+import sys
+import zipfile
+from pathlib import Path
+
+import pytest
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
+from vidmine import analyze, config, export, mine, transcribe  # noqa: E402
+from vidmine.store import Library  # noqa: E402
+
+JA_SRT = """1
+00:00:01,000 --> 00:00:03,500
+（ジナ）どうせゆうべ、こうふんして
+ねつけなかったんでしょ？
+
+2
+00:00:04,000 --> 00:00:07,000
+ま、建国千年のお祭りだから無理ないけど……
+"""
+EN_SRT = """1
+00:00:01,000 --> 00:00:03,500
+You were so excited you couldn't sleep, weren't you?
+
+2
+00:00:04,000 --> 00:00:07,000
+Well, it is the Millennial Fair.
+"""
+
+FAKE = {
+    "speaker": "", "speech_style": "standard",
+    "meaning": "Well, it's the kingdom's thousandth-anniversary festival, so I can't blame you…",
+    "note": "",
+    "tokens": [
+        {"surface": "ま", "reading": "", "dictionary_form": "ま", "gloss": "well", "pos": "expr", "game_term": False},
+        {"surface": "建国", "reading": "けんこく", "dictionary_form": "建国", "gloss": "founding of a nation", "pos": "noun", "game_term": False},
+        {"surface": "千年", "reading": "センネン", "dictionary_form": "千年", "gloss": "a thousand years", "pos": "noun", "game_term": False},
+        {"surface": "の", "reading": "の", "dictionary_form": "の", "gloss": "of", "pos": "particle", "game_term": False},
+        {"surface": "お祭り", "reading": "おまつり", "dictionary_form": "お祭り", "gloss": "festival", "pos": "noun", "game_term": False},
+        {"surface": "だから", "reading": "", "dictionary_form": "だから", "gloss": "because it's…", "pos": "conj", "game_term": False},
+        {"surface": "無理ない", "reading": "むりない", "dictionary_form": "無理ない", "gloss": "no wonder", "pos": "expr", "game_term": False},
+        {"surface": "けど", "reading": "", "dictionary_form": "けど", "gloss": "but…", "pos": "particle", "game_term": False},
+    ],
+    "grammar": [{"id": "muri-nai", "pattern": "無理ない", "explanation": "Understandable, no wonder."}],
+}
+
+
+@pytest.fixture(scope="module")
+def video(tmp_path_factory):
+    d = tmp_path_factory.mktemp("media")
+    (d / "ja.srt").write_text(JA_SRT, encoding="utf-8")
+    (d / "en.srt").write_text(EN_SRT, encoding="utf-8")
+    out = d / "[Fansub] Test Show - 03 (1080p).mkv"
+    # Anamorphic 720x480 (SAR 32:27) to check display-aspect frame grabs.
+    subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=720x480:rate=24:duration=9",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=9",
+        "-i", str(d / "ja.srt"), "-i", str(d / "en.srt"),
+        "-map", "0:v", "-map", "1:a", "-map", "2", "-map", "3",
+        "-c:v", "libx264", "-preset", "ultrafast", "-vf", "setsar=32/27",
+        "-c:a", "aac", "-c:s", "srt",
+        "-metadata:s:s:0", "language=jpn", "-metadata:s:s:1", "language=eng", str(out)],
+        check=True)
+    return out
+
+
+@pytest.fixture
+def cfg(tmp_path):
+    c = config.Config()
+    c.library_dir = tmp_path / "lib"
+    return c
+
+
+def payload(video, **kw):
+    p = {"path": str(video), "title": video.name,
+         "text": "ま、建国千年のお祭りだから無理ないけど……",
+         "start": 4.0, "end": 7.0, "english": "Well, it is the Millennial Fair.",
+         "context_before": ["（ジナ）どうせゆうべ、こうふんして\nねつけなかったんでしょ？"],
+         "sub_external": False, "sub_file": "", "audio_ff_index": 1, "video_ff_index": 0}
+    p.update(kw)
+    return p
+
+
+def test_clean_line():
+    assert mine.clean_line("（ジナ）どうせゆうべ、こうふんして\nねつけなかったんでしょ？") == \
+        ("どうせゆうべ、こうふんして　ねつけなかったんでしょ？", "ジナ")
+    assert mine.clean_line("（拍手）\n≪ありがとう≫") == ("ありがとう", "")
+    assert mine.clean_line("（拍手）") == ("", "")
+    assert mine.clean_title("[Fansub] Test Show - 03 (1080p).mkv") == "Test Show - 03"
+
+
+def test_furigana_and_readings():
+    card = {"sentence": "ま、建国千年のお祭りだから無理ないけど……"}
+    warnings = analyze.apply_analysis(card, json.loads(json.dumps(FAKE)))
+    assert warnings == []
+    assert card["furigana"] == "ま、 建国[けんこく] 千年[せんねん]の お祭り[おまつり]だから 無理ない[むりない]けど……"
+    by = {t["surface"]: t for t in card["tokens"]}
+    assert by["千年"]["reading"] == "せんねん"   # katakana normalized
+    assert by["の"]["reading"] == ""            # no kanji -> empty
+
+
+def test_coverage_warning():
+    card = {"sentence": "ま、建国千年のお祭り"}
+    bad = dict(FAKE, tokens=FAKE["tokens"][:2])
+    w = analyze.apply_analysis(card, bad)
+    assert any("千年のお祭り" in x for x in w)
+
+
+def test_mine_analyze_export(video, cfg, monkeypatch):
+    calls = []
+    monkeypatch.setattr(analyze, "call_claude", lambda c, msg: calls.append(msg) or FAKE)
+    card = mine.mine(cfg, payload(video))
+    assert card["_vidmine"]["status"] == "ready"
+    assert card["id"].startswith("vid-jp:") and card["id"].endswith(":4000")
+    assert card["location"] == "Test Show - 03 @ 0:04"
+    assert card["context_before"] == ["どうせゆうべ、こうふんして　ねつけなかったんでしょ？"]
+    assert "KNOWN_GRAMMAR_IDS" in calls[0]
+
+    lib = Library(cfg)
+    scene = Image.open(lib.root / card["images"]["scene"])
+    raw = Image.open(lib.root / card["images"]["scene_original"])
+    assert scene.size == raw.size
+
+
+def test_frame_aspect_and_audio(video, cfg, monkeypatch):
+    monkeypatch.setattr(analyze, "call_claude", lambda c, msg: FAKE)
+    card = mine.mine(cfg, payload(video))
+    lib = Library(cfg)
+    raw = Image.open(lib.root / card["images"]["scene_original"])
+    assert abs(raw.width / raw.height - 16 / 9) < 0.01
+    dur = float(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0",
+         str(lib.root / card["audio"])], capture_output=True, text=True).stdout)
+    assert 3.3 < dur < 3.8   # 3 s line + 2 x 250 ms padding
+
+
+def test_export_upsert_and_incremental(video, cfg, monkeypatch, tmp_path):
+    monkeypatch.setattr(analyze, "call_claude", lambda c, msg: FAKE)
+    mine.mine(cfg, payload(video))
+    mine.mine(cfg, payload(video, text=JA_SRT.split("\n")[2] + "\n" + JA_SRT.split("\n")[3],
+                           start=1.0, end=3.5, english=""))
+    res = export.export(cfg)
+    assert res["count"] == 2
+    with zipfile.ZipFile(res["path"]) as z:
+        names = set(z.namelist())
+        lines = z.read("VID_Cards/cards.jsonl").decode("utf-8").strip().split("\n")
+        cards = [json.loads(l) for l in lines]
+        for c in cards:
+            assert c["schema"] == "vid-jp-card/1"
+            assert not any(k.startswith("_") for k in c)
+            for rel in (c["images"]["scene"], c["images"]["scene_original"], c["audio"]):
+                assert f"VID_Cards/{rel}" in names
+            assert c["images"]["card"] is None and c["choices"] == []
+    first = next(c for c in cards if c["media"]["start_ms"] == 1000)
+    assert first["speaker"] == "ジナ" and first["english_source"] == ""
+
+    assert export.export(cfg)["count"] == 0            # nothing new
+    mine.mine(cfg, payload(video, english="Changed"))    # re-mine same line -> same id, new content
+    assert len(Library(cfg).load()) == 2
+    assert export.export(cfg)["count"] == 1
+    assert export.export(cfg, everything=True)["count"] == 2
+
+
+def test_failed_analysis_kept_and_skipped(video, cfg, monkeypatch):
+    def boom(c, m):
+        raise analyze.AnalysisError("HTTP 401: bad key")
+    monkeypatch.setattr(analyze, "call_claude", boom)
+    card = mine.mine(cfg, payload(video))
+    assert card["_vidmine"]["status"] == "failed"
+    assert export.export(cfg) == {"count": 0, "skipped": 1, "path": ""}
+
+
+def test_cli_mine_no_analyze(video, cfg, tmp_path):
+    conf = tmp_path / "config.toml"
+    conf.write_text(f'library_dir = "{(tmp_path / "clilib").as_posix()}"\n', encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(ROOT / "vidmine_cli.py"), "--config", str(conf),
+                           "mine", "--no-analyze"],
+                          input=json.dumps(payload(video), ensure_ascii=False).encode("utf-8"),
+                          capture_output=True)
+    out = json.loads(proc.stdout.decode("utf-8").strip().splitlines()[-1])
+    assert out["ok"] and out["status"] == "pending", proc.stderr
+
+
+def test_whisper_line_splitting():
+    words = [(0.0, 0.4, "今日"), (0.4, 0.6, "は"), (0.6, 1.0, "いい"), (1.0, 1.4, "天気"),
+             (1.4, 1.8, "ですね。"), (3.5, 4.0, "ご視聴ありがとうございました")]
+    lines = transcribe.split_words(words)
+    assert lines == [(0.0, 1.8, "今日はいい天気ですね。")]
+
+
+def test_subtitle_tracks(video, cfg):
+    from vidmine import subs
+    ja = subs.extract(cfg, video, 2)
+    en = subs.extract(cfg, video, 3)
+    assert [l.text.split("\n")[0] for l in ja] == ["（ジナ）どうせゆうべ、こうふんして", "ま、建国千年のお祭りだから無理ないけど……"]
+    assert abs(ja[0].start - 1.0) < 0.05 and abs(ja[1].end - 7.0) < 0.05
+    assert subs.line_at(ja, 0.5) == -1 and subs.line_at(ja, 3.8) == 0 and subs.line_at(ja, 5) == 1
+    assert subs.english_for(en, ja[1].start, ja[1].end) == "Well, it is the Millennial Fair."
+
+
+def test_parse_ass_style_srt():
+    from vidmine import subs
+    data = "1\n00:00:01,000 --> 00:00:02,000\n<i>{\\an8}こんにちは</i>\n\n2\n00:00:01,000 --> 00:00:02,000\nこんにちは\n\n"
+    out = subs.parse_srt(data)
+    assert len(out) == 1 and out[0].text == "こんにちは"
+
+
+def test_app_settings_roundtrip(tmp_path):
+    p = tmp_path / "settings.json"
+    c = config.load_app(p)
+    c.claude.api_key = "sk-test"
+    c.library_dir = tmp_path / "lib"
+    config.save_app(c, p)
+    c2 = config.load_app(p)
+    assert c2.claude.api_key == "sk-test" and c2.library_dir == tmp_path / "lib"

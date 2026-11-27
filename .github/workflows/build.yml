@@ -1,0 +1,79 @@
+name: Build VidMine for Windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages
+        run: python -m pip install -r requirements-app.txt pyinstaller pytest
+
+      - name: Download libmpv, ffmpeg and font
+        shell: pwsh
+        run: ./packaging/fetch_deps.ps1
+
+      - name: Unit tests
+        shell: pwsh
+        run: |
+          $env:PATH = "$PWD\deps;$env:PATH"
+          python -m pytest tests -q -p no:cacheprovider 2>&1 | Tee-Object -FilePath pytest.log
+          if ($LASTEXITCODE -ne 0) {
+            $tail = (Get-Content pytest.log -Tail 40) -join '%0A'
+            Write-Output "::error title=Unit tests failed::$tail"
+            exit 1
+          }
+
+      - name: Build app
+        run: pyinstaller --noconfirm packaging/vidmine.spec
+
+      - name: Self-test the built app
+        shell: pwsh
+        run: |
+          $out = "$PWD\selftest.json"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath dist\VidMine\VidMine.exe -ArgumentList '--selftest', "`"$out`"" -Wait -PassThru
+          if (Test-Path $out) { $json = Get-Content $out -Raw } else { $json = "no selftest.json written" }
+          Write-Output $json
+          if ($p.ExitCode -ne 0) {
+            $log = "$env:APPDATA\VidMine\vidmine.log"
+            if (Test-Path $log) { $json += "`n--- log ---`n" + (Get-Content $log -Tail 40 -Raw) }
+            Write-Output ("::error title=Self-test failed (exit $($p.ExitCode))::" + ($json -replace "`r?`n", '%0A'))
+            exit 1
+          }
+
+      - name: Zip
+        shell: pwsh
+        run: |
+          Copy-Item README.md dist\VidMine\README.txt
+          Compress-Archive -Path dist\VidMine -DestinationPath VidMine-win64.zip -CompressionLevel Optimal
+          "{0:N0} MB" -f ((Get-Item VidMine-win64.zip).Length / 1MB)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VidMine-win64
+          path: VidMine-win64.zip
+          retention-days: 14
+
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "build-${{ github.run_number }}"
+          gh release create $tag VidMine-win64.zip --title "VidMine build ${{ github.run_number }}" --notes "Download VidMine-win64.zip, unzip it, and run VidMine.exe." --latest

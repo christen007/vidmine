@@ -1,0 +1,34 @@
+# Copy this file to config.toml (same folder) and adjust.
+# Paths may use ~ and %ENVVARS%. Use forward slashes or doubled backslashes on Windows.
+
+# Where mined cards, images and audio are kept.
+library_dir = "~/Documents/VidMine"
+# Where export zips go (default: <library_dir>/exports).
+# export_dir = "~/Desktop"
+
+# Leave as-is if ffmpeg is on your PATH, otherwise give the full path.
+ffmpeg = "ffmpeg"
+ffprobe = "ffprobe"
+
+[audio]
+padding_ms = 250      # extra audio before and after each line
+bitrate = "128k"
+
+[image]
+max_width = 1280
+jpeg_quality = 88
+font = ""             # empty = auto (Yu Gothic Bold on Windows)
+
+[claude]
+model = "claude-sonnet-5-5"
+api_key = ""          # empty = use the ANTHROPIC_API_KEY environment variable
+max_tokens = 4000
+# Reuse grammar ids from your Chrono Trigger cards so one grammar index covers both:
+# grammar_seed_files = ["C:/Users/you/Documents/CT_Cards/cards.jsonl"]
+grammar_seed_files = []
+
+[whisper]
+model = "large-v3"    # or "kotoba-tech/kotoba-whisper-v2.0-faster" (Japanese-tuned, faster)
+device = "cuda"
+compute_type = "float16"
+beam_size = 5
