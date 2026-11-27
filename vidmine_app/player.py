@@ -49,15 +49,16 @@ class MpvWidget(QWidget):
 
     # Small helpers that never raise (mpv properties are unavailable while idle).
     def get(self, prop: str, default=None):
+        # Note: python-mpv's mpv[...] reads *options*; live properties need _get_property.
         try:
-            v = self.mpv[prop]
+            v = self.mpv._get_property(prop)
             return default if v is None else v
         except Exception:
             return default
 
     def set(self, prop: str, value) -> None:
         try:
-            self.mpv[prop] = value
+            self.mpv._set_property(prop, value)
         except Exception:
             pass
 
