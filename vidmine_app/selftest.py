@@ -67,7 +67,8 @@ def run(app, out_path: Path) -> int:
                            for t in tl],
                 "win_path": win.path, "ja": win.ja_combo.currentText(), "en": win.en_combo.currentText(),
                 "hint": win.lines_hint.text(), "lines": len(win.lines), "en_lines": len(win.en_lines),
-                "busy": win.runner.busy, "last_error": win.last_error}
+                "busy": win.runner.busy, "last_error": win.last_error,
+                "idle": win.player.get("idle-active"), "mpv_log": list(win.player.log)[-60:]}
 
     try:
         os.environ["VIDMINE_FAKE_ANALYSIS"] = "1"

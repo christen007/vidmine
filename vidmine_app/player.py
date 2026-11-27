@@ -1,6 +1,8 @@
 """The embedded mpv video player widget."""
 from __future__ import annotations
 
+import collections
+
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QWidget
@@ -34,8 +36,12 @@ class MpvWidget(QWidget):
             opts.update(vo="null", ao="null")
         else:
             opts["wid"] = str(int(self.winId()))
-        self.mpv = mpv.MPV(**opts)
+        self.log = collections.deque(maxlen=300)  # recent mpv messages, for error reports
+        self.mpv = mpv.MPV(log_handler=self._on_log, loglevel="info", **opts)
         self.mpv.observe_property("track-list", self._on_tracks)
+
+    def _on_log(self, level, prefix, text):
+        self.log.append(f"[{level}] {prefix}: {text.rstrip()}")
 
     def _on_tracks(self, _name, value):
         # Called on mpv's thread; Qt queues the signal to the GUI thread.
