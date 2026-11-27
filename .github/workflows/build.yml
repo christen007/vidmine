@@ -85,7 +85,7 @@ jobs:
           Compress-Archive -Path dist\VidMine -DestinationPath VidMine-win64.zip -CompressionLevel Optimal
           "{0:N0} MB" -f ((Get-Item VidMine-win64.zip).Length / 1MB)
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: VidMine-win64
           path: VidMine-win64.zip

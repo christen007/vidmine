@@ -630,10 +630,38 @@ class MainWindow(QMainWindow):
         card = self.selected_card()
         if not card or not card.get("audio"):
             return
+        path = self.library().root / card["audio"]
+        if not path.exists():
+            self.statusBar().showMessage(f"Audio file not found: {path}", 6000)
+            return
+        try:
+            if self.audio_player is None:
+                import collections
+
+                import mpv
+                self.audio_log = collections.deque(maxlen=50)
+                opts = dict(vid="no", idle="yes", keep_open="no", input_default_bindings=False)
+                if self.headless:
+                    opts["ao"] = "null"  # build machines have no sound card
+                self.audio_player = mpv.MPV(
+                    log_handler=lambda lvl, pre, txt: self.audio_log.append(f"[{lvl}] {pre}: {txt.strip()}"),
+                    loglevel="warn", **opts)
+            self.audio_player.play(str(path))
+            self.audio_player.pause = False
+            self.audio_player.volume = self.volume.value()
+        except Exception as e:
+            self._report("Couldn't play audio", str(e))
+            return
+        QTimer.singleShot(1500, self._check_audio)
+
+    def _check_audio(self):
+        """Report a playback failure instead of failing silently."""
         if self.audio_player is None:
-            import mpv
-            self.audio_player = mpv.MPV(vo="null", video=False, ao="null" if self.headless else "auto")
-        self.audio_player.play(str(self.library().root / card["audio"]))
+            return
+        errors = [l for l in self.audio_log if l.startswith(("[error]", "[fatal]"))]
+        if errors:
+            self.statusBar().showMessage("Couldn't play audio: " + errors[-1], 10000)
+            self.audio_log.clear()
 
     def _open_path(self, path: str, select: bool = False):
         if sys.platform == "win32":

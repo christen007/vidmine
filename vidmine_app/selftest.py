@@ -119,6 +119,15 @@ def run(app, out_path: Path) -> int:
             raise AssertionError("card preview did not render")
         step("preview")
 
+        def audio_pos():
+            try:
+                return win.audio_player._get_property("time-pos") or 0
+            except Exception:
+                return 0
+        win.play_card_audio()
+        wait(lambda: audio_pos() > 0.3, 15, "card audio to play")
+        step("play audio")
+
         win.export_cards()
         wait(lambda: win.last_export is not None, 60, "export")
         with zipfile.ZipFile(win.last_export["path"]) as z:
