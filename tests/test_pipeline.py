@@ -267,29 +267,50 @@ def test_clean_key_and_segment_splitting():
     assert transcribe.split_words(words) == [(0.0, 2.4, "卵も買います")]
 
 
-def test_auth_headers_and_workspace_discovery(monkeypatch):
+def _fake_api(monkeypatch, handler):
     import io
     import urllib.error
     import urllib.request
     seen = []
 
     class Resp(io.BytesIO):
+        status = 200
         def __enter__(self): return self
         def __exit__(self, *a): return False
 
     def fake_urlopen(req, timeout=0):
         h = {k.lower(): v for k, v in req.header_items()}
         seen.append((req.full_url, h))
-        if "workspaces" in req.full_url:
-            return Resp(json.dumps({"data": [{"id": "wrkspc_other", "name": "Other"},
-                                             {"id": "wrkspc_def", "name": "Default Workspace"}]}).encode())
-        if h.get("anthropic-workspace-id") == "wrkspc_def":
-            return Resp(b'{"input_tokens": 5}')
-        raise urllib.error.HTTPError(req.full_url, 401, "x", {}, io.BytesIO(
-            b'{"error":{"type":"authentication_error","message":"workspace id required"}}'))
+        code, body = handler(req.full_url, h)
+        if code == 200:
+            return Resp(json.dumps(body).encode())
+        raise urllib.error.HTTPError(req.full_url, code, "x", {}, io.BytesIO(json.dumps(body).encode()))
 
     monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
-    ok, ws, msg = analyze.find_working_setup("sk-ant-usr-abc")
-    assert ok and ws == "wrkspc_def" and "Default Workspace" in msg
-    assert all(h["authorization"] == "Bearer sk-ant-usr-abc" and "x-api-key" not in h for _, h in seen)
-    assert any("count_tokens" in u for u, _ in seen)
+    return seen
+
+
+def test_auth_finds_workspace(monkeypatch):
+    def handler(url, h):
+        if "workspaces" in url:
+            return 200, {"data": [{"id": "wrkspc_other", "name": "Other"},
+                                  {"id": "wrkspc_def", "name": "Default Workspace"}]}
+        if h.get("anthropic-workspace-id") == "wrkspc_def" and "authorization" in h:
+            return 200, {"content": []}
+        return 401, {"error": {"type": "authentication_error", "message": "invalid x-api-key"}}
+    seen = _fake_api(monkeypatch, handler)
+    ok, ws, auth, msg, report = analyze.find_working_setup("sk-ant-usr-abcdefghijklmnop")
+    assert ok and ws == "wrkspc_def" and auth == "bearer" and "Default Workspace" in msg
+    assert not any("abcdefghijklmnop" in line for line in report[1:])  # key never fully printed
+    assert "sk-ant-usr-abc" in report[0] and "mnop" in report[0]
+
+
+def test_auth_falls_back_to_x_api_key_and_reports_credits(monkeypatch):
+    _fake_api(monkeypatch, lambda url, h: (200, {}) if "x-api-key" in h else
+              (401, {"error": {"type": "authentication_error", "message": "bad"}}))
+    ok, ws, auth, msg, _ = analyze.find_working_setup("sk-ant-api03-xyz")
+    assert ok and auth == "x-api-key"
+    _fake_api(monkeypatch, lambda url, h: (400, {"error": {
+        "type": "invalid_request_error", "message": "Your credit balance is too low to access the API."}}))
+    ok, ws, auth, msg, _ = analyze.find_working_setup("sk-ant-usr-xyz")
+    assert ok is False and "no credits" in msg

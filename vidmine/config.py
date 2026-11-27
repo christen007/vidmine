@@ -30,6 +30,7 @@ class ClaudeCfg:
     model: str = "claude-sonnet-5-5"
     api_key: str = ""  # empty = read the ANTHROPIC_API_KEY environment variable
     workspace_id: str = ""  # needed for personal/service-account keys not scoped to a workspace
+    auth: str = "bearer"  # how the key is sent: "bearer" (Authorization header) or "x-api-key"
     max_tokens: int = 4000
     # Extra cards.jsonl files whose grammar ids should be reused (e.g. the CT export).
     grammar_seed_files: list[str] = field(default_factory=list)
@@ -88,6 +89,7 @@ APP_SETTINGS_FIELDS = {
     "export_dir": (None, "export_dir"),
     "api_key": ("claude", "api_key"),
     "workspace_id": ("claude", "workspace_id"),
+    "auth": ("claude", "auth"),
     "model": ("claude", "model"),
     "grammar_seed_files": ("claude", "grammar_seed_files"),
     "padding_ms": ("audio", "padding_ms"),

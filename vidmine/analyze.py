@@ -137,66 +137,129 @@ def clean_key(key: str) -> str:
     return "".join(key.split())
 
 
-def api_headers(key: str, workspace_id: str = "") -> dict:
-    h = {"authorization": f"Bearer {key}", "anthropic-version": "2023-06-01",
-         "content-type": "application/json"}
+def api_headers(key: str, workspace_id: str = "", auth: str = "bearer") -> dict:
+    h = {"anthropic-version": "2023-06-01", "content-type": "application/json"}
+    if auth == "x-api-key":
+        h["x-api-key"] = key
+    else:
+        h["authorization"] = f"Bearer {key}"
     if workspace_id:
         h["anthropic-workspace-id"] = workspace_id
     return h
 
 
-def _error_message(e: urllib.error.HTTPError) -> str:
+def _parse_error(code: int, body: str) -> tuple[str, str]:
     try:
-        return json.loads(e.read().decode("utf-8", "replace"))["error"]["message"]
+        err = json.loads(body)["error"]
+        return err.get("type", ""), err.get("message", "")
     except Exception:
-        return f"HTTP {e.code}"
+        return "", body[:200] or f"HTTP {code}"
 
 
-def check_key(key: str, workspace_id: str = "", model: str = "claude-sonnet-5-5") -> tuple[bool | None, str]:
-    """(True, '') if Anthropic accepts the key, (False, why) if rejected, (None, why) if unreachable.
-    Uses the free token-counting endpoint, which is authorized exactly like a real request."""
-    body = json.dumps({"model": model, "messages": [{"role": "user", "content": "こんにちは"}]}).encode()
-    req = urllib.request.Request("https://api.anthropic.com/v1/messages/count_tokens", data=body,
-                                 headers=api_headers(key, workspace_id), method="POST")
+def explain_error(code: int | None, etype: str, message: str) -> str:
+    """Plain-English explanation of an API error."""
+    low = message.lower()
+    if code is None:
+        return f"Couldn't reach Anthropic: {message}"
+    if "credit balance" in low or etype == "billing_error":
+        return ("Your Claude API account has no credits. Add credits at "
+                "platform.claude.com/settings/billing (this is separate from a Claude chat subscription).")
+    if "workspace" in low:
+        return f"This key needs a workspace ID ({message})."
+    if etype == "not_found_error" and "model" in low:
+        return f"The Claude model isn't available to this key ({message}). Pick another model in Settings."
+    if etype == "authentication_error" or code == 401:
+        return f"Anthropic didn't accept this key ({message})."
+    if etype == "permission_error" or code == 403:
+        return f"This key isn't allowed to do that ({message})."
+    if code == 429:
+        return f"Rate limited; try again in a minute ({message})."
+    return f"HTTP {code} {etype}: {message}"
+
+
+def _request(url: str, key: str, workspace_id: str = "", auth: str = "bearer", body: dict | None = None,
+             timeout: int = 20) -> tuple[int | None, str, str]:
+    """(status, error_type, message). status 200 means success."""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    req = urllib.request.Request(url, data=data, headers=api_headers(key, workspace_id, auth),
+                                 method="POST" if data else "GET")
     try:
-        with urllib.request.urlopen(req, timeout=15):
-            return True, ""
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            r.read()
+            return r.status, "", ""
     except urllib.error.HTTPError as e:
-        msg = _error_message(e)
-        if e.code in (400, 401, 403, 404):
-            return False, f"Anthropic rejected this key: {msg}"
-        return None, f"Couldn't check the key right now ({msg})."
+        etype, msg = _parse_error(e.code, e.read().decode("utf-8", "replace"))
+        return e.code, etype, msg
     except Exception as e:
-        return None, f"Couldn't reach Anthropic to check the key ({e})."
+        return None, "", str(e)
 
 
-def list_workspaces(key: str) -> list[tuple[str, str]]:
-    """(id, name) of the workspaces a personal key can use, Default Workspace first.
-    Empty if the key isn't allowed to list them."""
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/organizations/workspaces?include_default=true&limit=100",
-        headers=api_headers(key))
+def _tiny_message(key: str, workspace_id: str, auth: str, model: str):
+    """A real one-token request: checks the key, the workspace, the model and billing together."""
+    return _request(API_URL, key, workspace_id, auth,
+                    {"model": model, "max_tokens": 1, "messages": [{"role": "user", "content": "hi"}]})
+
+
+def list_workspaces(key: str, auth: str = "bearer") -> tuple[list[tuple[str, str]], str]:
+    """([(id, name)], problem). Default Workspace first. The list is empty if the key can't list them."""
+    url = "https://api.anthropic.com/v1/organizations/workspaces?include_default=true&limit=100"
+    req = urllib.request.Request(url, headers=api_headers(key, "", auth))
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
             data = json.loads(r.read().decode("utf-8")).get("data", [])
-    except Exception:
-        return []
+    except urllib.error.HTTPError as e:
+        etype, msg = _parse_error(e.code, e.read().decode("utf-8", "replace"))
+        return [], f"HTTP {e.code} {etype}: {msg}"
+    except Exception as e:
+        return [], str(e)
     out = [(w["id"], w.get("name") or w["id"]) for w in data if w.get("id") and not w.get("archived_at")]
     out.sort(key=lambda w: 0 if "default" in w[1].lower() else 1)
-    return out
+    return out, ""
 
 
-def find_working_setup(key: str, workspace_id: str = "", model: str = "claude-sonnet-5-5"
-                       ) -> tuple[bool | None, str, str]:
-    """Check a key; if it needs a workspace, find one it works with.
-    Returns (ok, workspace_id_to_use, message)."""
-    ok, why = check_key(key, workspace_id, model)
-    if ok is not False:
-        return ok, workspace_id, why
-    for ws_id, name in list_workspaces(key):
-        if ws_id != workspace_id and check_key(key, ws_id, model)[0]:
-            return True, ws_id, f"Using workspace “{name}”."
-    return False, workspace_id, why
+def find_working_setup(key: str, workspace_id: str = "", model: str = "claude-sonnet-5-5"):
+    """Try every supported way of sending the key until a real request works.
+    Returns (ok, workspace_id, auth, message, report_lines). ok is None if Anthropic was unreachable."""
+    report = [f"Key: {key[:14]}…{key[-4:]} ({len(key)} characters)", f"Model: {model}",
+              f"Workspace ID in settings: {workspace_id or '(none)'}"]
+    attempts: list[tuple[str, str]] = []
+    for auth in ("bearer", "x-api-key"):
+        attempts.append((workspace_id, auth))
+        if workspace_id:
+            attempts.append(("", auth))
+    first_problem = None
+    for ws, auth in attempts:
+        code, etype, msg = _tiny_message(key, ws, auth, model)
+        report.append(f"[{auth}{', workspace ' + ws if ws else ''}] → "
+                      + ("OK" if code == 200 else f"HTTP {code} {etype}: {msg}"))
+        if code == 200:
+            return True, ws, auth, "", report
+        if code is None:
+            return None, workspace_id, "bearer", explain_error(code, etype, msg), report
+        problem = (code, etype, msg)
+        if "credit balance" in msg.lower() or (etype == "not_found_error" and "model" in msg.lower()):
+            # The key itself works; the account or model is the problem.
+            return False, ws, auth, explain_error(*problem), report
+        first_problem = first_problem or problem
+    for auth in ("bearer", "x-api-key"):
+        spaces, why = list_workspaces(key, auth)
+        report.append(f"[{auth}] list workspaces → "
+                      + (", ".join(f"{n} ({i})" for i, n in spaces) if spaces else f"none ({why})"))
+        for ws_id, name in spaces:
+            code, etype, msg = _tiny_message(key, ws_id, auth, model)
+            report.append(f"[{auth}, workspace {ws_id}] → " + ("OK" if code == 200 else f"HTTP {code} {etype}: {msg}"))
+            if code == 200:
+                return True, ws_id, auth, f"Using workspace “{name}”.", report
+            if "credit balance" in msg.lower():
+                return False, ws_id, auth, explain_error(code, etype, msg), report
+        if spaces:
+            break
+    return False, workspace_id, "bearer", explain_error(*first_problem), report
+
+
+def check_key(key: str, workspace_id: str = "", model: str = "claude-sonnet-5-5"):
+    ok, _ws, _auth, msg, _report = find_working_setup(key, workspace_id, model)
+    return ok, msg
 
 
 def call_claude(cfg: Config, user_message: str) -> dict:
@@ -213,7 +276,7 @@ def call_claude(cfg: Config, user_message: str) -> dict:
         "tool_choice": {"type": "tool", "name": "record_card"},
         "messages": [{"role": "user", "content": user_message}],
     }).encode("utf-8")
-    headers = api_headers(key, cfg.claude.workspace_id)
+    headers = api_headers(key, cfg.claude.workspace_id, cfg.claude.auth)
     last = ""
     for attempt in range(4):
         req = urllib.request.Request(API_URL, data=body, headers=headers, method="POST")
@@ -226,18 +289,10 @@ def call_claude(cfg: Config, user_message: str) -> dict:
             raise AnalysisError("Claude returned no card data")
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")
-            last = f"HTTP {e.code}: {detail[:300]}"
-            if e.code == 401 or (e.code == 400 and "workspace" in detail.lower()):
-                try:
-                    msg = json.loads(detail)["error"]["message"]
-                except Exception:
-                    msg = detail[:200]
-                raise AnalysisError(f"Your Claude API key was rejected ({msg}). Open Settings and "
-                                    "click Save: VidMine re-checks the key and finds your workspace. "
-                                    "Then use Retry analysis.")
-            if e.code == 400 and "credit balance" in detail.lower():
-                raise AnalysisError("Your Claude API account is out of credits. Add credits at "
-                                    "platform.claude.com/settings/billing, then use Retry analysis.")
+            etype, msg = _parse_error(e.code, detail)
+            last = explain_error(e.code, etype, msg)
+            if e.code in (400, 401, 403, 404):
+                raise AnalysisError(last + " Open Settings and click Test connection for details.")
             if e.code not in (429, 500, 502, 503, 529):
                 break
         except (urllib.error.URLError, TimeoutError) as e:

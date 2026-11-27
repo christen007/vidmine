@@ -41,6 +41,9 @@ class SettingsDialog(QDialog):
         kl.setContentsMargins(0, 0, 0, 0)
         kl.addWidget(self.key)
         kl.addWidget(show)
+        test = QPushButton("Test connection")
+        test.clicked.connect(self.test_connection)
+        kl.addWidget(test)
         form.addRow("Claude API key", key_row)
         hint = QLabel('Create one at <a href="https://platform.claude.com/settings/keys">platform.claude.com</a>. '
                       "It's stored only on this PC.")
@@ -104,37 +107,59 @@ class SettingsDialog(QDialog):
         if f:
             self.seed.setText(f)
 
-    def save(self):
+    def _run_check(self):
         from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QApplication, QMessageBox
+        from PySide6.QtWidgets import QApplication
 
         from vidmine.analyze import clean_key, find_working_setup
+        key = clean_key(self.key.text())
+        model = self.model.currentText().strip() or MODELS[0]
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            return key, find_working_setup(key, self.workspace.text().strip(), model)
+        finally:
+            QApplication.restoreOverrideCursor()
+
+    def test_connection(self):
+        from PySide6.QtWidgets import QMessageBox
+        key = self.key.text().strip()
+        if not key:
+            QMessageBox.information(self, "Test connection", "Paste your API key first.")
+            return
+        _key, (ok, ws, auth, msg, report) = self._run_check()
+        verdict = ("✓ Working. Click Save to keep these settings." + (f" {msg}" if msg else "")
+                   if ok else f"✗ {msg}")
+        if ok:
+            self.workspace.setText(ws)
+            self._auth = auth
+        ReportDialog(verdict, "\n".join(report), self).exec()
+
+    def save(self):
+        from PySide6.QtWidgets import QMessageBox
+
+        from vidmine.analyze import clean_key
         c = self.cfg
         key = clean_key(self.key.text())
         ws = self.workspace.text().strip()
-        if key and (key != c.claude.api_key or ws != c.claude.workspace_id or not ws):
+        auth = getattr(self, "_auth", c.claude.auth)
+        if key and (key != c.claude.api_key or ws != c.claude.workspace_id or not getattr(self, "_auth", None)):
             if not key.startswith("sk-ant-"):
                 QMessageBox.warning(self, "Claude API key", "That doesn't look like a Claude API key. "
                                     "Keys start with sk-ant- and come from platform.claude.com/settings/keys.")
                 return
-            QApplication.setOverrideCursor(Qt.WaitCursor)
-            try:
-                ok, ws, why = find_working_setup(key, ws, self.model.currentText().strip() or MODELS[0])
-            finally:
-                QApplication.restoreOverrideCursor()
+            key, (ok, ws, auth, why, report) = self._run_check()
             if ok is False:
-                QMessageBox.warning(self, "Claude API key", why + "\n\nIf this is a personal key "
-                                    "(sk-ant-usr-…), the easiest fix is to create a new key and choose a "
-                                    "workspace (e.g. Default) when creating it. Or paste your workspace ID "
-                                    "(wrkspc_…) into the Workspace ID box.")
+                ReportDialog("✗ " + why + "\n\nThe settings were not saved. Fix the problem above, or "
+                             "send the details below to get help.", "\n".join(report), self).exec()
                 return
             if ok is None:
                 QMessageBox.information(self, "Claude API key", why + "\nThe key is saved anyway.")
             elif why:
                 QMessageBox.information(self, "Claude API key", "Key accepted. " + why)
             self.workspace.setText(ws)
-        c.claude.workspace_id = ws
         c.claude.api_key = key
+        c.claude.workspace_id = ws
+        c.claude.auth = auth
         c.claude.model = self.model.currentText().strip() or MODELS[0]
         c.library_dir = Path(self.library.text().strip() or config.Config().library_dir)
         exp = self.exports.text().strip()
@@ -144,3 +169,25 @@ class SettingsDialog(QDialog):
         c.whisper.model = self.whisper.currentData()
         config.save_app(c)
         self.accept()
+
+
+class ReportDialog(QDialog):
+    """Shows a connection check result with copyable details (the key is shortened)."""
+
+    def __init__(self, verdict: str, details: str, parent=None):
+        from PySide6.QtWidgets import QApplication, QPlainTextEdit
+        super().__init__(parent)
+        self.setWindowTitle("Claude connection")
+        self.setMinimumSize(640, 360)
+        lay = QVBoxLayout(self)
+        v = QLabel(verdict)
+        v.setWordWrap(True)
+        lay.addWidget(v)
+        box = QPlainTextEdit(details)
+        box.setReadOnly(True)
+        lay.addWidget(box, 1)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        copy = buttons.addButton("Copy details", QDialogButtonBox.ActionRole)
+        copy.clicked.connect(lambda: QApplication.clipboard().setText(verdict + "\n\n" + details))
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
