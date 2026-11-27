@@ -122,14 +122,18 @@ class SettingsDialog(QDialog):
 
     def test_connection(self):
         from PySide6.QtWidgets import QMessageBox
-        key = self.key.text().strip()
+        from vidmine.analyze import clean_key, key_problem
+        key = clean_key(self.key.text())
         if not key:
             QMessageBox.information(self, "Test connection", "Paste your API key first.")
+            return
+        if key_problem(key):
+            QMessageBox.warning(self, "Test connection", key_problem(key))
             return
         _key, (ok, ws, auth, msg, report) = self._run_check()
         verdict = ("✓ Working. Click Save to keep these settings." + (f" {msg}" if msg else "")
                    if ok else f"✗ {msg}")
-        if ok:
+        if ok or (ok is False and "no credits" in msg):
             self.workspace.setText(ws)
             self._auth = auth
         ReportDialog(verdict, "\n".join(report), self).exec()
@@ -137,22 +141,24 @@ class SettingsDialog(QDialog):
     def save(self):
         from PySide6.QtWidgets import QMessageBox
 
-        from vidmine.analyze import clean_key
+        from vidmine.analyze import clean_key, key_problem
         c = self.cfg
         key = clean_key(self.key.text())
         ws = self.workspace.text().strip()
         auth = getattr(self, "_auth", c.claude.auth)
         if key and (key != c.claude.api_key or ws != c.claude.workspace_id or not getattr(self, "_auth", None)):
-            if not key.startswith("sk-ant-"):
-                QMessageBox.warning(self, "Claude API key", "That doesn't look like a Claude API key. "
-                                    "Keys start with sk-ant- and come from platform.claude.com/settings/keys.")
+            if key_problem(key):
+                QMessageBox.warning(self, "Claude API key", key_problem(key))
                 return
             key, (ok, ws, auth, why, report) = self._run_check()
-            if ok is False:
+            if ok is False and "no credits" in why:
+                # The key itself works; save it and just warn about the balance.
+                QMessageBox.warning(self, "Claude API key", "Key accepted and saved. However: " + why)
+            elif ok is False:
                 ReportDialog("✗ " + why + "\n\nThe settings were not saved. Fix the problem above, or "
                              "send the details below to get help.", "\n".join(report), self).exec()
                 return
-            if ok is None:
+            elif ok is None:
                 QMessageBox.information(self, "Claude API key", why + "\nThe key is saved anyway.")
             elif why:
                 QMessageBox.information(self, "Claude API key", "Key accepted. " + why)

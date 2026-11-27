@@ -314,3 +314,36 @@ def test_auth_falls_back_to_x_api_key_and_reports_credits(monkeypatch):
         "type": "invalid_request_error", "message": "Your credit balance is too low to access the API."}}))
     ok, ws, auth, msg, _ = analyze.find_working_setup("sk-ant-usr-xyz")
     assert ok is False and "no credits" in msg
+
+
+def test_structured_output_request_and_parsing(monkeypatch):
+    sent = []
+
+    def handler(url, h):
+        return 200, {"stop_reason": "end_turn", "content": [{"type": "text", "text": json.dumps(FAKE)}]}
+    seen = _fake_api(monkeypatch, handler)
+    import urllib.request
+    real = urllib.request.urlopen
+
+    def capture(req, timeout=0):
+        sent.append(json.loads(req.data.decode("utf-8")))
+        return real(req, timeout)
+    monkeypatch.setattr(urllib.request, "urlopen", capture)
+    c = config.Config()
+    c.claude.api_key = "sk-ant-usr-" + "x" * 90
+    out = analyze.call_claude(c, analyze.build_user_message({"sentence": "テスト"}, {}))
+    assert out["meaning"] == FAKE["meaning"]
+    body = sent[0]
+    assert "tools" not in body and "tool_choice" not in body
+    schema = body["output_config"]["format"]["schema"]
+    assert schema["additionalProperties"] is False
+    assert schema["properties"]["tokens"]["items"]["additionalProperties"] is False
+    assert seen[0][1]["authorization"].startswith("Bearer ")
+
+
+def test_key_problem():
+    assert "shortened preview" in analyze.key_problem("sk-ant-usr-1UY...ZwAA")
+    assert "characters" in analyze.key_problem("sk-ant-usr-abc")
+    assert analyze.key_problem("sk-ant-usr-" + "a" * 95) == ""
+    with pytest.raises(analyze.AnalysisError):
+        analyze.parse_card_response({"stop_reason": "max_tokens", "content": []})

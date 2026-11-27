@@ -104,6 +104,21 @@ TOOL = {
 }
 
 
+def _strict(schema):
+    """Structured outputs require additionalProperties: false on every object."""
+    if isinstance(schema, dict):
+        out = {k: _strict(v) for k, v in schema.items()}
+        if out.get("type") == "object":
+            out["additionalProperties"] = False
+        return out
+    if isinstance(schema, list):
+        return [_strict(x) for x in schema]
+    return schema
+
+
+CARD_SCHEMA = _strict(TOOL["input_schema"])
+
+
 def build_user_message(card: dict, known: dict[str, str]) -> str:
     payload = {
         "SENTENCE": card["sentence"],
@@ -116,6 +131,22 @@ def build_user_message(card: dict, known: dict[str, str]) -> str:
     known_lines = "\n".join(f"{k} = {v}" for k, v in sorted(known.items())) or "(none yet)"
     return (json.dumps(payload, ensure_ascii=False, indent=1)
             + "\n\nKNOWN_GRAMMAR_IDS:\n" + known_lines)
+
+
+def parse_card_response(data: dict) -> dict:
+    stop = data.get("stop_reason")
+    if stop == "refusal":
+        raise AnalysisError("Claude declined to analyze this line.")
+    if stop == "max_tokens":
+        raise AnalysisError("Claude's answer was cut off (too long). Use Retry analysis.")
+    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+    for b in data.get("content", []):  # older-style tool replies, just in case
+        if b.get("type") == "tool_use" and not text:
+            return b["input"]
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        raise AnalysisError("Claude returned card data VidMine couldn't read. Use Retry analysis.")
 
 
 def fake_result(user_message: str) -> dict:
@@ -257,6 +288,20 @@ def find_working_setup(key: str, workspace_id: str = "", model: str = "claude-so
     return False, workspace_id, "bearer", explain_error(*first_problem), report
 
 
+def key_problem(key: str) -> str:
+    """A reason the text can't be a full key (e.g. the shortened preview from the key list), or ''."""
+    if "..." in key or "…" in key:
+        return ("That's the shortened preview shown in the Console's key list (it contains “...”), "
+                "not the key itself. The full key is shown only once, when you create it: create a "
+                "new key and click the copy button in that window.")
+    if not key.startswith("sk-ant-"):
+        return "Claude API keys start with sk-ant- and come from platform.claude.com/settings/keys."
+    if len(key) < 60:
+        return (f"That key is only {len(key)} characters long; real keys are about 100. It was "
+                "probably cut off when copying. Create a new key and use its copy button.")
+    return ""
+
+
 def check_key(key: str, workspace_id: str = "", model: str = "claude-sonnet-5-5"):
     ok, _ws, _auth, msg, _report = find_working_setup(key, workspace_id, model)
     return ok, msg
@@ -270,10 +315,11 @@ def call_claude(cfg: Config, user_message: str) -> dict:
         raise AnalysisError("No Claude API key: set ANTHROPIC_API_KEY or [claude] api_key in config.toml")
     body = json.dumps({
         "model": cfg.claude.model,
-        "max_tokens": cfg.claude.max_tokens,
+        "max_tokens": max(cfg.claude.max_tokens, 8000),
         "system": SYSTEM,
-        "tools": [TOOL],
-        "tool_choice": {"type": "tool", "name": "record_card"},
+        # Structured outputs: the reply is JSON matching the card schema. (Forced tool use
+        # isn't accepted by Claude Opus/Sonnet 5.5 and later.)
+        "output_config": {"format": {"type": "json_schema", "schema": CARD_SCHEMA}},
         "messages": [{"role": "user", "content": user_message}],
     }).encode("utf-8")
     headers = api_headers(key, cfg.claude.workspace_id, cfg.claude.auth)
@@ -281,12 +327,9 @@ def call_claude(cfg: Config, user_message: str) -> dict:
     for attempt in range(4):
         req = urllib.request.Request(API_URL, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=180) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            for block in data.get("content", []):
-                if block.get("type") == "tool_use":
-                    return block["input"]
-            raise AnalysisError("Claude returned no card data")
+            return parse_card_response(data)
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")
             etype, msg = _parse_error(e.code, detail)
@@ -360,7 +403,7 @@ def apply_analysis(card: dict, result: dict) -> list[str]:
             "reading": reading,
             "dictionary_form": t.get("dictionary_form", ""),
             "gloss": t.get("gloss", ""),
-            "pos": t.get("pos") if t.get("pos") in POS else "expr",
+            "pos": (t.get("pos") or "").lower() if (t.get("pos") or "").lower() in POS else "expr",
             "game_term": bool(t.get("game_term", False)),
         })
     problem = coverage_problem(card["sentence"], tokens)
@@ -372,7 +415,7 @@ def apply_analysis(card: dict, result: dict) -> list[str]:
     card["furigana"] = build_furigana(card["sentence"], tokens)
     card["meaning"] = result.get("meaning", "")
     card["note"] = result.get("note", "")
-    style = result.get("speech_style", "standard")
+    style = (result.get("speech_style") or "standard").lower()
     card["speech_style"] = style if style in STYLES else "standard"
     if not card.get("speaker"):
         card["speaker"] = result.get("speaker", "")
