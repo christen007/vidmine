@@ -267,9 +267,11 @@ class MainWindow(QMainWindow):
         cp.addWidget(split, 1)
         row = QHBoxLayout()
         self.play_audio_btn = button("🔊 Play audio", self.play_card_audio, "Play this card's audio clip")
+        self.video_btn = button("🎬 Play video", self.play_card_video, "Open this card's video")
+        self.folder_btn = button("Show in folder", self.show_card_video, "Show the card video in File Explorer")
         self.retry_btn = button("Retry analysis", self.retry_card, "Run Claude's analysis again")
         self.delete_btn = button("Delete", self.delete_card, "Remove this card")
-        for b in (self.play_audio_btn, self.retry_btn, self.delete_btn):
+        for b in (self.play_audio_btn, self.video_btn, self.folder_btn, self.retry_btn, self.delete_btn):
             row.addWidget(b)
         row.addStretch(1)
         cp.addLayout(row)
@@ -555,7 +557,11 @@ class MainWindow(QMainWindow):
         self.mining -= 1
         meta = card.get("_vidmine", {})
         if meta.get("status") == STATUS_READY:
-            self.statusBar().showMessage(f"✓ Mined 「{card['sentence']}」 — {card['meaning']}", 8000)
+            extra = ""
+            if self.cfg.video.enabled:
+                extra = " · video saved" if meta.get("video") and not meta.get("video_error") \
+                    else f" · video failed: {meta.get('video_error', '')}"
+            self.statusBar().showMessage(f"✓ Mined 「{card['sentence']}」 — {card['meaning']}{extra}", 10000)
         else:
             self.last_error = meta.get("error", "")
             self.statusBar().showMessage(f"Mined, but analysis failed: {self.last_error}", 10000)
@@ -608,6 +614,12 @@ class MainWindow(QMainWindow):
         card = self.selected_card()
         for b in (self.play_audio_btn, self.retry_btn, self.delete_btn):
             b.setEnabled(card is not None)
+        meta = (card or {}).get("_vidmine", {})
+        has_video = bool(meta.get("video")) and Path(meta.get("video", "")).exists()
+        can_make = bool(card) and meta.get("status") == STATUS_READY
+        self.video_btn.setText("🎬 Play video" if has_video else "🎬 Make video")
+        self.video_btn.setEnabled(has_video or can_make)
+        self.folder_btn.setEnabled(has_video)
         if not card:
             self.preview.setHtml("<p style='color:#888'>Mined cards appear here. Select one to preview it.</p>")
             return
@@ -622,6 +634,44 @@ class MainWindow(QMainWindow):
             import mpv
             self.audio_player = mpv.MPV(vo="null", video=False, ao="null" if self.headless else "auto")
         self.audio_player.play(str(self.library().root / card["audio"]))
+
+    def _open_path(self, path: str, select: bool = False):
+        if sys.platform == "win32":
+            import subprocess
+            if select:
+                subprocess.Popen(["explorer", "/select,", path])
+            else:
+                os.startfile(path)  # opens in the default video player
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent if select else path)))
+
+    def play_card_video(self):
+        card = self.selected_card()
+        if not card:
+            return
+        video = card.get("_vidmine", {}).get("video")
+        if video and Path(video).exists():
+            self._open_path(video)
+            return
+        self.statusBar().showMessage("Making the card video…")
+        cfg = self.cfg
+
+        def work():
+            mine.make_video(cfg, card)
+            Library(cfg).upsert(card)
+            return card
+
+        def done(c):
+            err = c.get("_vidmine", {}).get("video_error")
+            self.statusBar().showMessage(f"Video failed: {err}" if err else "Card video saved.", 8000)
+            self.refresh_cards(c["id"])
+        self.runner.start(work, done, lambda e: self._report("Video failed", e))
+
+    def show_card_video(self):
+        card = self.selected_card()
+        video = (card or {}).get("_vidmine", {}).get("video")
+        if video and Path(video).exists():
+            self._open_path(video, select=True)
 
     def retry_card(self):
         card = self.selected_card()

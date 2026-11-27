@@ -28,6 +28,8 @@ def card_html(card: dict, library_root: Path, width: int = 420) -> str:
     if status == "failed":
         parts.append(f'<p style="color:#e06c6c;"><b>Analysis failed:</b> {_e(meta.get("error"))}<br>'
                      'Use “Retry analysis” once the problem is fixed.</p>')
+    elif status == "ready" and meta.get("video_error"):
+        parts.append(f'<p style="color:#e0b341;"><b>Video not made:</b> {_e(meta["video_error"])}</p>')
     elif status != "ready":
         parts.append('<p style="color:#e0b341;">Analyzing…</p>')
 

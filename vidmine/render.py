@@ -58,27 +58,31 @@ def make_scene_images(cfg: Config, frame_png: Path, sentence: str,
         img = img.resize((cfg.image.max_width, h), Image.LANCZOS)
     img.save(out_raw, "JPEG", quality=cfg.image.jpeg_quality)
 
-    w, h = img.size
-    size = max(18, round(h / 13))
-    font = ImageFont.truetype(find_font(cfg), size)
-    canvas = img.convert("RGBA")
-    overlay = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
+    subtitled = Image.alpha_composite(img.convert("RGBA"), subtitle_overlay(cfg, img.size, sentence))
+    subtitled.convert("RGB").save(out_scene, "JPEG", quality=cfg.image.jpeg_quality)
+
+
+def subtitle_overlay(cfg: Config, size: tuple[int, int], sentence: str) -> Image.Image:
+    """Transparent image of the given size with the line drawn as a bottom subtitle."""
+    w, h = size
+    font_size = max(18, round(h / 13))
+    font = ImageFont.truetype(find_font(cfg), font_size)
+    overlay = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
     # Full-width spaces are pauses; show them as line breaks if the line is long.
     text = sentence.replace("　", "\n") if len(sentence) > 22 else sentence
     lines = _wrap(draw, text, font, int(w * 0.9))
-    line_h = round(size * 1.3)
+    line_h = round(font_size * 1.3)
     block_h = line_h * len(lines)
     top = h - block_h - round(h * 0.06)
     # Soft dark band behind the text so it stays readable on bright scenes.
-    band_top = max(0, top - round(size * 0.6))
+    band_top = max(0, top - round(font_size * 0.6))
     for y in range(band_top, h):
-        alpha = min(150, int(150 * (y - band_top) / max(1, size)))
+        alpha = min(150, int(150 * (y - band_top) / max(1, font_size)))
         draw.line([(0, y), (w, y)], fill=(0, 0, 0, alpha))
-    stroke = max(2, size // 12)
+    stroke = max(2, font_size // 12)
     for i, line in enumerate(lines):
         tw = draw.textlength(line, font=font)
         draw.text(((w - tw) / 2, top + i * line_h), line, font=font,
                   fill=(255, 255, 255, 255), stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
-    Image.alpha_composite(canvas, overlay).convert("RGB").save(
-        out_scene, "JPEG", quality=cfg.image.jpeg_quality)
+    return overlay

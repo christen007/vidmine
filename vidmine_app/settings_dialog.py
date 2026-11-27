@@ -3,9 +3,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog,
-                               QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QSpinBox, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
+                               QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
+                               QPushButton, QSpinBox, QVBoxLayout, QWidget)
 
 from vidmine import config
 
@@ -88,6 +88,29 @@ class SettingsDialog(QDialog):
         i = self.whisper.findData(cfg.whisper.model)
         self.whisper.setCurrentIndex(max(0, i))
         form.addRow("Whisper model", self.whisper)
+
+        self.video_on = QCheckBox("Also make a video for each mined line (clip + lesson panel)")
+        self.video_on.setChecked(cfg.video.enabled)
+        form.addRow("Card videos", self.video_on)
+        self.lead = QDoubleSpinBox()
+        self.tail = QDoubleSpinBox()
+        for box, val in ((self.lead, cfg.video.lead_s), (self.tail, cfg.video.tail_s)):
+            box.setRange(0.0, 15.0)
+            box.setSingleStep(0.5)
+            box.setDecimals(1)
+            box.setSuffix(" s")
+            box.setValue(val)
+        times = QWidget()
+        tl = QHBoxLayout(times)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.addWidget(QLabel("before"))
+        tl.addWidget(self.lead)
+        tl.addWidget(QLabel("after"))
+        tl.addWidget(self.tail)
+        tl.addStretch(1)
+        form.addRow("Extra video time", times)
+        self.videos = QLineEdit(str(cfg.videos_dir))
+        form.addRow("Video folder", _path_row(self.videos, lambda: self._pick_dir(self.videos)))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
@@ -173,6 +196,11 @@ class SettingsDialog(QDialog):
         c.claude.grammar_seed_files = [self.seed.text().strip()] if self.seed.text().strip() else []
         c.audio.padding_ms = self.padding.value()
         c.whisper.model = self.whisper.currentData()
+        c.video.enabled = self.video_on.isChecked()
+        c.video.lead_s = self.lead.value()
+        c.video.tail_s = self.tail.value()
+        vd = self.videos.text().strip()
+        c.video_dir = Path(vd) if vd and Path(vd) != c.library_dir / "Videos" else None
         config.save_app(c)
         self.accept()
 

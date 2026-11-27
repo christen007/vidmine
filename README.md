@@ -18,6 +18,7 @@ The right-hand **Lines** panel lists every Japanese subtitle line in the video, 
 - Right-click any line in the list to mine it, or double-click it to jump to it.
 - The **Cards** tab shows what you've mined, with a preview of each card.
 - Click **Export for Kaeru** to save new cards as a zip, then import that zip in Kaeru's **Mine** tab.
+- Each mined line also becomes a **card video**: the clip (with a second before and after) plays on top with the Japanese line subtitled, and the full lesson panel is shown below. Videos are saved in `Documents\VidMine\Videos`, one folder per show. Use **🎬 Play video** or **Show in folder** in the Cards tab. You can turn them off or change the extra time in Settings.
 
 | Key | Action |
 |---|---|

@@ -87,6 +87,9 @@ class Library:
             for rel in (card["images"].get("scene"), card["images"].get("scene_original"), card.get("audio")):
                 if rel:
                     (self.root / rel).unlink(missing_ok=True)
+            video = card.get("_vidmine", {}).get("video")
+            if video:
+                Path(video).unlink(missing_ok=True)
 
     def get(self, card_id: str) -> dict | None:
         return self.load().get(card_id)

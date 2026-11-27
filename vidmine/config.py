@@ -48,6 +48,13 @@ class WhisperCfg:
 
 
 @dataclass
+class VideoCfg:
+    enabled: bool = True   # make a card video for every mined line
+    lead_s: float = 1.0    # extra seconds before the line
+    tail_s: float = 1.0    # extra seconds after the line
+
+
+@dataclass
 class Config:
     library_dir: Path = Path.home() / "Documents" / "VidMine"
     export_dir: Path | None = None  # default: <library_dir>/exports
@@ -57,10 +64,16 @@ class Config:
     image: ImageCfg = field(default_factory=ImageCfg)
     claude: ClaudeCfg = field(default_factory=ClaudeCfg)
     whisper: WhisperCfg = field(default_factory=WhisperCfg)
+    video: VideoCfg = field(default_factory=VideoCfg)
+    video_dir: Path | None = None  # default: <library_dir>/Videos
 
     @property
     def exports(self) -> Path:
         return self.export_dir or (self.library_dir / "exports")
+
+    @property
+    def videos_dir(self) -> Path:
+        return self.video_dir or (self.library_dir / "Videos")
 
 
 FROZEN = getattr(sys, "frozen", False)
@@ -94,6 +107,10 @@ APP_SETTINGS_FIELDS = {
     "grammar_seed_files": ("claude", "grammar_seed_files"),
     "padding_ms": ("audio", "padding_ms"),
     "whisper_model": ("whisper", "model"),
+    "video_enabled": ("video", "enabled"),
+    "video_lead_s": ("video", "lead_s"),
+    "video_tail_s": ("video", "tail_s"),
+    "video_dir": (None, "video_dir"),
 }
 
 
@@ -117,7 +134,7 @@ def load_app(path: Path | None = None) -> Config:
             if key in raw and raw[key] not in (None, ""):
                 target = getattr(cfg, section) if section else cfg
                 val = raw[key]
-                if attr in ("library_dir", "export_dir"):
+                if attr in ("library_dir", "export_dir", "video_dir"):
                     val = _expand(val)
                 setattr(target, attr, val)
     return cfg
@@ -151,7 +168,7 @@ def load(path: Path | None = None) -> Config:
     cfg.ffmpeg = raw.get("ffmpeg", cfg.ffmpeg)
     cfg.ffprobe = raw.get("ffprobe", cfg.ffprobe)
     for name, sub in (("audio", cfg.audio), ("image", cfg.image),
-                      ("claude", cfg.claude), ("whisper", cfg.whisper)):
+                      ("claude", cfg.claude), ("whisper", cfg.whisper), ("video", cfg.video)):
         for k, v in raw.get(name, {}).items():
             if hasattr(sub, k):
                 setattr(sub, k, v)

@@ -23,8 +23,10 @@ foreach ($tool in 'ffmpeg.exe', 'ffprobe.exe') {
 }
 
 # Japanese font for the text drawn on card fronts (optional: falls back to Windows fonts)
-try {
-  Invoke-WebRequest https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/SubsetOTF/JP/NotoSansJP-Bold.otf -OutFile deps/NotoSansJP-Bold.otf
-} catch { Write-Output "::warning::Font download failed: $_" }
+foreach ($w in 'Bold', 'Regular') {
+  try {
+    Invoke-WebRequest "https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/SubsetOTF/JP/NotoSansJP-$w.otf" -OutFile "deps/NotoSansJP-$w.otf"
+  } catch { Write-Output "::warning::Font download failed ($w): $_" }
+}
 
 Get-ChildItem deps -File | Format-Table Name, Length

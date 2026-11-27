@@ -107,6 +107,11 @@ def run(app, out_path: Path) -> int:
         if card["official_english"] != "Well, it is the Millennial Fair.":
             raise AssertionError(f"english not aligned: {card['official_english']!r}")
         step("mine", id=card["id"], sentence=card["sentence"], context=card["context_before"])
+        video = Path(card["_vidmine"].get("video") or "")
+        if not video.is_file() or video.stat().st_size < 20_000:
+            raise AssertionError(f"card video missing: {card['_vidmine'].get('video_error') or video}")
+        from vidmine.cardpanel import Fonts
+        step("card video", file=video.name, kb=video.stat().st_size // 1000, fonts=[Fonts(cfg).reg, Fonts(cfg).bold])
 
         win.card_list.setCurrentRow(0)
         QCoreApplication.processEvents()

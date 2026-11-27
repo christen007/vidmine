@@ -347,3 +347,18 @@ def test_key_problem():
     assert analyze.key_problem("sk-ant-usr-" + "a" * 95) == ""
     with pytest.raises(analyze.AnalysisError):
         analyze.parse_card_response({"stop_reason": "max_tokens", "content": []})
+
+
+def test_card_video(video, cfg, monkeypatch):
+    from vidmine import cardvideo
+    monkeypatch.setattr(analyze, "call_claude", lambda c, msg: FAKE)
+    card = mine.mine(cfg, payload(video))
+    out = cardvideo.make_card_video(cfg, card, video, 1, 0)
+    assert out.exists() and out.parent.parent == cfg.videos_dir
+    info = json.loads(subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,width,height:format=duration",
+         "-of", "json", str(out)], capture_output=True, text=True).stdout)
+    v = next(s for s in info["streams"] if s["codec_type"] == "video")
+    assert v["width"] == 1024 and v["height"] > 576 + 500
+    assert any(s["codec_type"] == "audio" for s in info["streams"])
+    assert 4.7 < float(info["format"]["duration"]) < 5.4   # 3 s line + 1 s before + 1 s after

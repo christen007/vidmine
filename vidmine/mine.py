@@ -118,7 +118,11 @@ def mine(cfg: Config, payload: dict, do_analyze: bool = True) -> dict:
             "audio_padding_ms": cfg.audio.padding_ms,
         },
         "_vidmine": {"status": STATUS_PENDING, "error": "", "warnings": [],
-                     "caption_speaker": speaker},
+                     "caption_speaker": speaker,
+                     # what's needed to (re)make the card video later
+                     "source_path": str(video.resolve()),
+                     "audio_ff_index": payload.get("audio_ff_index"),
+                     "video_ff_index": payload.get("video_ff_index")},
     }
     lib.upsert(card)
     if do_analyze:
@@ -137,5 +141,25 @@ def analyze_card(cfg: Config, lib: Library, card: dict) -> dict:
         meta["status"], meta["error"] = STATUS_READY, ""
     except Exception as e:  # keep the card; `vidmine analyze` can retry
         meta["status"], meta["error"] = STATUS_FAILED, str(e)
+    if meta["status"] == STATUS_READY and cfg.video.enabled:
+        make_video(cfg, card)
     lib.upsert(card)
     return card
+
+
+def make_video(cfg: Config, card: dict) -> None:
+    """Make (or remake) the card video. Problems are recorded, never fatal to the card."""
+    from .cardvideo import make_card_video
+    meta = card.setdefault("_vidmine", {})
+    src = Path(meta.get("source_path") or "")
+    if not src.is_file():
+        meta["video_error"] = f"Original video not found: {src}"
+        return
+    try:
+        old = meta.get("video")
+        out = make_card_video(cfg, card, src, meta.get("audio_ff_index"), meta.get("video_ff_index"))
+        if old and Path(old) != out:
+            Path(old).unlink(missing_ok=True)
+        meta["video"], meta["video_error"] = str(out), ""
+    except Exception as e:
+        meta["video_error"] = str(e)
