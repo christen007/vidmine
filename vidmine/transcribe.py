@@ -25,11 +25,15 @@ from .media import run as run_tool
 
 Progress = Callable[[float, str], None]
 
-MODELS = {
-    "large-v3": "Systran/faster-whisper-large-v3",
-    "large-v3-turbo": "mobiuslabs/faster-whisper-large-v3-turbo",
-    "tiny": "Systran/faster-whisper-tiny",  # used by the build self-test
+# Hugging Face repositories for each model, tried in order (mirrors move occasionally).
+MODEL_REPOS = {
+    "large-v3": ["Systran/faster-whisper-large-v3"],
+    "large-v3-turbo": ["dropbox-dash/faster-whisper-large-v3-turbo",
+                       "deepdml/faster-whisper-large-v3-turbo-ct2",
+                       "mobiuslabs/faster-whisper-large-v3-turbo"],
+    "tiny": ["Systran/faster-whisper-tiny"],  # used by the build self-test
 }
+MODELS = MODEL_REPOS  # backwards-compatible name
 # NVIDIA libraries needed by CTranslate2 4.x on Windows: package -> required major version.
 CUDA_PACKAGES = {
     "nvidia-cublas-cu12": "12",
@@ -132,20 +136,43 @@ def _head_size(url: str) -> int | None:
         raise
 
 
-def model_url(name: str, path: str) -> str:
-    return f"https://huggingface.co/{MODELS[name]}/resolve/main/{path}"
+def _repo_candidates(name: str) -> list[str]:
+    repos = list(MODEL_REPOS.get(name, []))
+    try:  # the installed faster-whisper knows its own preferred repository
+        from faster_whisper.utils import _MODELS
+        if _MODELS.get(name) and _MODELS[name] not in repos:
+            repos.insert(0, _MODELS[name])
+    except Exception:
+        pass
+    return repos
+
+
+def _url(repo: str, path: str) -> str:
+    return f"https://huggingface.co/{repo}/resolve/main/{path}"
+
+
+def model_source(name: str) -> tuple[str, list[tuple[str, int]]]:
+    """(repository, [(path, size)]) for the first reachable repository of a model."""
+    errors = []
+    for repo in _repo_candidates(name):
+        try:
+            if _head_size(_url(repo, "model.bin")) is None:
+                errors.append(f"{repo}: no model.bin")
+                continue
+        except urllib.error.HTTPError as e:
+            errors.append(f"{repo}: HTTP {e.code}")
+            continue
+        files = []
+        for path in MODEL_CANDIDATES:
+            size = _head_size(_url(repo, path))
+            if size is not None:
+                files.append((path, size))
+        return repo, files
+    raise RuntimeError(f"Whisper model {name} wasn't found on Hugging Face ({'; '.join(errors)})")
 
 
 def model_files(name: str) -> list[tuple[str, int]]:
-    """(path, size) of the files to download for a model."""
-    files = []
-    for path in MODEL_CANDIDATES:
-        size = _head_size(model_url(name, path))
-        if size is not None:
-            files.append((path, size))
-    if not any(p == "model.bin" for p, _ in files):
-        raise RuntimeError(f"Whisper model {name} wasn't found on Hugging Face")
-    return files
+    return model_source(name)[1]
 
 
 def cuda_wheels(packages: dict[str, str] | None = None) -> list[tuple[str, str, int]]:
@@ -180,7 +207,7 @@ class _Meter:
 
 
 def download_model(name: str, progress: Progress | None = None, cancel: threading.Event | None = None) -> Path:
-    files = model_files(name)
+    repo, files = model_source(name)
     dest = model_path(name)
     dest.mkdir(parents=True, exist_ok=True)
     meter = _Meter(sum(s for _, s in files), f"Downloading Whisper {name}", progress)
@@ -189,8 +216,8 @@ def download_model(name: str, progress: Progress | None = None, cancel: threadin
         if target.exists() and size and target.stat().st_size == size:
             meter(size)
             continue
-        _download(model_url(name, path), target, meter, cancel)
-    (dest / ".complete").write_text("ok", encoding="utf-8")
+        _download(_url(repo, path), target, meter, cancel)
+    (dest / ".complete").write_text(repo, encoding="utf-8")
     return dest
 
 

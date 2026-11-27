@@ -177,7 +177,8 @@ def run_whisper(app, out_path: Path, video: Path) -> int:
         sources, bad = {}, []
         for n in ("large-v3", "large-v3-turbo"):
             try:
-                sources[n] = {p: round(sz / 1e6) for p, sz in transcribe.model_files(n)}
+                repo, files = transcribe.model_source(n)
+                sources[n] = {"repo": repo, **{p: round(sz / 1e6) for p, sz in files}}
             except Exception as e:
                 sources[n] = f"ERROR {e}"
                 bad.append(n)
