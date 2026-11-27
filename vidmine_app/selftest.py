@@ -138,3 +138,91 @@ def run(app, out_path: Path) -> int:
                 pass
         out_path.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     return 0 if result["ok"] else 1
+
+
+def run_whisper(app, out_path: Path, video: Path) -> int:
+    """VidMine.exe --selftest-whisper result.json speech.mkv
+
+    Checks the real download sources (Hugging Face model lists, NVIDIA wheels on PyPI),
+    downloads the tiny model and the small CUDA runtime package, then transcribes a
+    spoken (English) test video through the window and mines a line from it."""
+    from PySide6.QtCore import QCoreApplication
+
+    from vidmine import config, transcribe
+    from vidmine.store import Library
+
+    result: dict = {"ok": False, "steps": []}
+    win = None
+
+    def step(name, **info):
+        result["steps"].append({"step": name, **info})
+
+    def wait(cond, timeout, what):
+        end = time.time() + timeout
+        while time.time() < end:
+            QCoreApplication.processEvents()
+            if cond():
+                return
+            time.sleep(0.05)
+        raise TimeoutError(f"timed out waiting for {what}")
+
+    try:
+        tmp = Path(tempfile.mkdtemp(prefix="vidmine_asr_test_"))
+        os.environ.update({"VIDMINE_FAKE_ANALYSIS": "1", "VIDMINE_WHISPER_LANGUAGE": "en",
+                           "VIDMINE_MODELS_DIR": str(tmp / "models"), "VIDMINE_CUDA_DIR": str(tmp / "cuda")})
+        cfg = config.load_app(tmp / "settings.json")
+        cfg.library_dir = tmp / "library"
+        cfg.whisper.model = "tiny"
+
+        sizes = {n: sum(s for _, s in transcribe.model_files(n)) for n in ("large-v3", "large-v3-turbo")}
+        step("model sources", mb={k: round(v / 1e6) for k, v in sizes.items()})
+        wheels = transcribe.cuda_wheels()
+        step("cuda sources", wheels=[(p, u.rsplit("/", 1)[-1], round(s / 1e6)) for p, u, s in wheels],
+             total_mb=round(sum(s for _, _, s in wheels) / 1e6))
+        transcribe.download_cuda_libs(packages={"nvidia-cuda-runtime-cu12": "12"})
+        dlls = sorted(p.name for p in transcribe.cuda_dir().iterdir())
+        if not any(d.lower().startswith("cudart64_12") for d in dlls):
+            raise AssertionError(f"cudart not extracted: {dlls}")
+        step("cuda extract", dlls=dlls)
+
+        import ctranslate2
+        step("ctranslate2", version=ctranslate2.__version__, gpus=transcribe.gpu_count())
+
+        from .window import MainWindow
+        win = MainWindow(cfg, headless=True, selftest=True)
+        win.show()
+        win.open_file(video)
+        wait(lambda: win.path is not None, 30, "video to open")
+        wait(lambda: win.whisper_btn.isVisible(), 10, "Whisper button (no subtitles)")
+        step("no subtitles -> whisper button")
+
+        t0 = time.time()
+        win.start_transcribe()
+        wait(lambda: win.asr_job is None, 900, "transcription")
+        if not win.asr_result or "error" in win.asr_result:
+            raise AssertionError(f"transcription failed: {win.asr_result}")
+        wait(lambda: len(win.lines) >= 1, 30, "transcript lines")
+        step("transcribe", seconds=round(time.time() - t0), lines=[l.text for l in win.lines][:10],
+             track=win.ja_combo.currentText())
+
+        win.mine_line(0)
+        wait(lambda: win.mining == 0 and not win.runner.busy, 90, "mining")
+        cards = list(Library(cfg).load().values())
+        if len(cards) != 1 or cards[0]["source"] != "asr":
+            raise AssertionError(f"expected one asr card: {win.last_error or cards}")
+        step("mine", source=cards[0]["source"], sentence=cards[0]["sentence"])
+        result["ok"] = True
+    except Exception:
+        result["error"] = traceback.format_exc()
+        if win is not None:
+            result["diag"] = {"hint": win.lines_hint.text(), "asr": win.asr_result,
+                              "asr_label": win.asr_label.text(), "last_error": win.last_error,
+                              "mpv_log": list(win.player.log)[-30:]}
+    finally:
+        if win is not None:
+            try:
+                win.close()
+            except Exception:
+                pass
+        out_path.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
+    return 0 if result["ok"] else 1

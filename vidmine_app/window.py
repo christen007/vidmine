@@ -7,17 +7,18 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
-from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout,
-                               QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-                               QMessageBox, QPushButton, QSlider, QSplitter, QTabWidget,
-                               QTextBrowser, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
+                               QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu,
+                               QMessageBox, QProgressBar, QPushButton, QSlider, QSplitter,
+                               QTabWidget, QTextBrowser, QVBoxLayout, QWidget)
 
-from vidmine import config, export, mine, subs
+from vidmine import config, export, mine, subs, transcribe
 from vidmine.store import STATUS_READY, Library
 
 from .player import MpvWidget
 from .preview import card_html
 from .settings_dialog import SettingsDialog
+from .whisper_dialog import WhisperSetupDialog
 from .workers import Runner
 
 VIDEO_FILTER = "Video files (*.mkv *.mp4 *.avi *.webm *.m4v *.mov *.ts *.wmv *.flv);;All files (*)"
@@ -90,6 +91,10 @@ class MainWindow(QMainWindow):
         self.audio_player = None
         self.last_error = ""
         self.last_export: dict | None = None
+        self.sub_offset = 0.0
+        self.asr_job = None
+        self.asr_result: dict | None = None
+        self.prefer_sub_file: str | None = None
 
         self.setWindowTitle("VidMine")
         self.resize(1400, 820)
@@ -110,6 +115,8 @@ class MainWindow(QMainWindow):
         tb.setMovable(False)
         self.toolbar = tb
         for text, slot, tip in (("Open video…", self.choose_file, "Ctrl+O"),
+                                ("🎙 Transcribe audio", self.start_transcribe,
+                                 "Create Japanese subtitles from the audio with Whisper"),
                                 ("Export for Kaeru", self.export_cards, "Save new cards as a zip for Kaeru"),
                                 ("Settings", self.open_settings, "API key and folders")):
             act = QAction(text, self)
@@ -179,6 +186,17 @@ class MainWindow(QMainWindow):
         tracks.addWidget(QLabel("English subtitles"))
         tracks.addWidget(self.en_combo)
         tracks.addWidget(self.show_en)
+        tracks.addSpacing(16)
+        self.offset_box = QDoubleSpinBox()
+        self.offset_box.setRange(-60.0, 60.0)
+        self.offset_box.setSingleStep(0.1)
+        self.offset_box.setDecimals(1)
+        self.offset_box.setSuffix(" s")
+        self.offset_box.setToolTip("Shift the Japanese subtitles if they appear too early or late.\n"
+                                   "Z = 0.1 s earlier, X = 0.1 s later")
+        self.offset_box.valueChanged.connect(self.set_offset)
+        tracks.addWidget(QLabel("Subtitle timing"))
+        tracks.addWidget(self.offset_box)
         tracks.addStretch(1)
 
         left = QWidget()
@@ -208,6 +226,30 @@ class MainWindow(QMainWindow):
         self.line_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.line_list.customContextMenuRequested.connect(self._line_menu)
         lp.addWidget(self.lines_hint)
+        self.whisper_btn = QPushButton("🎙  Create Japanese subtitles from the audio (Whisper)")
+        self.whisper_btn.setFocusPolicy(Qt.NoFocus)
+        self.whisper_btn.setStyleSheet("QPushButton{padding:8px;font-weight:bold;}")
+        self.whisper_btn.clicked.connect(self.start_transcribe)
+        self.whisper_btn.hide()
+        lp.addWidget(self.whisper_btn)
+        self.asr_box = QWidget()
+        ab = QVBoxLayout(self.asr_box)
+        ab.setContentsMargins(0, 0, 0, 0)
+        self.asr_label = QLabel("")
+        self.asr_label.setWordWrap(True)
+        self.asr_bar = QProgressBar()
+        self.asr_bar.setRange(0, 1000)
+        self.asr_bar.setTextVisible(False)
+        asr_cancel = QPushButton("Cancel")
+        asr_cancel.setFocusPolicy(Qt.NoFocus)
+        asr_cancel.clicked.connect(self.cancel_transcribe)
+        row_ = QHBoxLayout()
+        row_.addWidget(self.asr_bar, 1)
+        row_.addWidget(asr_cancel)
+        ab.addWidget(self.asr_label)
+        ab.addLayout(row_)
+        self.asr_box.hide()
+        lp.addWidget(self.asr_box)
         lp.addWidget(self.line_list, 1)
         lp.addWidget(QLabel("Double-click a line to jump to it · right-click to mine it"))
         self.tabs.addTab(lines_page, "Lines")
@@ -250,6 +292,8 @@ class MainWindow(QMainWindow):
             "R": self.replay_line, "M": self.mine_current, "E": lambda: self.show_en.toggle(),
             "F": self.toggle_fullscreen, "Escape": lambda: self.toggle_fullscreen(False),
             "Ctrl+O": self.choose_file,
+            "Z": lambda: self.offset_box.setValue(self.offset_box.value() - 0.1),
+            "X": lambda: self.offset_box.setValue(self.offset_box.value() + 0.1),
         }
         for k, fn in keys.items():
             sc = QShortcut(QKeySequence(k), self)  # main window only, not dialogs
@@ -300,11 +344,19 @@ class MainWindow(QMainWindow):
             self.lines, self.en_lines, self.current_idx = [], [], -1
             self.line_list.clear()
             self.ja_track = self.en_track = None
+            self.offset_box.setValue(0.0)
             title = self.player.get("media-title") or Path(path).name
             self.setWindowTitle(f"{title} — VidMine")
         by_id = {t["id"]: t for t in sub_tracks}
         ja = by_id.get(self.ja_track["id"]) if self.ja_track else None
         en = by_id.get(self.en_track["id"]) if self.en_track else None
+        if self.prefer_sub_file:  # a transcript we just added
+            want = os.path.normcase(os.path.abspath(self.prefer_sub_file))
+            for t in sub_tracks:
+                f = t.get("external-filename")
+                if f and os.path.normcase(os.path.abspath(f)) == want:
+                    ja, self.prefer_sub_file = t, None
+                    break
         ja = ja or pick_track(sub_tracks, JA_LANGS)
         en = en or pick_track(sub_tracks, EN_LANGS)
         self._fill_combo(self.ja_combo, sub_tracks, ja)
@@ -326,14 +378,17 @@ class MainWindow(QMainWindow):
         self.lines, self.current_idx = [], -1
         self.line_list.clear()
         self.player.set("sid", track["id"] if track else "no")
+        self.whisper_btn.setVisible(self.asr_job is None and
+                                    (not track or track.get("codec") in subs.IMAGE_CODECS))
         if not track:
-            self.lines_hint.setText("No Japanese subtitle track found. If you have a Japanese subtitle "
-                                    "file, put it next to the video with the same name (e.g. "
-                                    "Episode 03.ja.srt) and reopen the video.")
+            self.lines_hint.setText("This video has no Japanese subtitles. Whisper can create them "
+                                    "from the audio, or put a Japanese subtitle file next to the "
+                                    "video with the same name (e.g. Episode 03.ja.srt).")
             return
         if track.get("codec") in subs.IMAGE_CODECS:
             self.lines_hint.setText("This Japanese track is made of images (PGS/DVD subtitles), which "
-                                    "VidMine can't read yet. Try another track or a text subtitle file.")
+                                    "VidMine can't read yet. Whisper can create text subtitles "
+                                    "from the audio instead.")
             return
         self.lines_hint.setText("Reading subtitles…")
         source, idx = self._source_of(track)
@@ -348,8 +403,10 @@ class MainWindow(QMainWindow):
         self.line_list.clear()
         for l in lines:
             QListWidgetItem(f"{fmt_time(l.start)}   {l.text.replace(chr(10), '　')}", self.line_list)
-        self.lines_hint.setText(f"{len(lines)} Japanese lines. Press M (or ⛏ Mine line) to mine the "
-                                "current one.")
+        src = ("Whisper transcript. Words may occasionally be misheard. "
+               if (self.ja_track or {}).get("external-filename", "").lower().endswith(".whisper.srt") else "")
+        self.lines_hint.setText(f"{len(lines)} Japanese lines. {src}Press M (or ⛏ Mine line) to mine "
+                                "the current one.")
 
     def _ja_failed(self, token: int, err: str):
         if token == self.ja_token:
@@ -385,7 +442,7 @@ class MainWindow(QMainWindow):
             if not self.slider.isSliderDown():
                 self.slider.setValue(int(t * 1000))
         self.time_label.setText(f"{fmt_time(t)} / {fmt_time(dur)}")
-        idx = subs.line_at(self.lines, t)
+        idx = subs.line_at(self.lines, t - self.sub_offset)
         if idx != self.current_idx and 0 <= idx < self.line_list.count():
             self.current_idx = idx
             self.line_list.setCurrentRow(idx)
@@ -407,18 +464,18 @@ class MainWindow(QMainWindow):
 
     def jump_to(self, idx: int):
         if 0 <= idx < len(self.lines):
-            self.seek(self.lines[idx].start)
+            self.seek(self.lines[idx].start + self.sub_offset)
             self.player.set("pause", False)
 
     def current_line(self) -> int:
-        return subs.line_at(self.lines, self.player.get("time-pos") or 0)
+        return subs.line_at(self.lines, (self.player.get("time-pos") or 0) - self.sub_offset)
 
     def step_line(self, d: int):
         if not self.lines:
             return
         idx = self.current_line()
         t = self.player.get("time-pos") or 0
-        if d < 0 and idx >= 0 and t - self.lines[idx].start > 1.0:
+        if d < 0 and idx >= 0 and t - (self.lines[idx].start + self.sub_offset) > 1.0:
             target = idx  # back to the start of this line first
         else:
             target = idx + d
@@ -472,13 +529,14 @@ class MainWindow(QMainWindow):
         if not (0 <= idx < len(self.lines)) or not self._ensure_key():
             return
         line = self.lines[idx]
+        start, end = line.start + self.sub_offset, line.end + self.sub_offset
         payload = {
             "path": self.path,
             "title": self.player.get("media-title") or Path(self.path).name,
             "text": line.text,
-            "start": line.start,
-            "end": line.end,
-            "english": subs.english_for(self.en_lines, line.start, line.end),
+            "start": start,
+            "end": end,
+            "english": subs.english_for(self.en_lines, start, end),
             "context_before": [l.text for l in self.lines[max(0, idx - 2):idx]
                                if line.start - l.start < 30],
             "sub_external": bool(self.ja_track and self.ja_track.get("external")),
@@ -586,6 +644,101 @@ class MainWindow(QMainWindow):
         self.library().delete(card["id"])
         self.refresh_cards()
 
+    # ---- subtitle timing -----------------------------------------------------------
+    def set_offset(self, v: float):
+        self.sub_offset = round(v, 2)
+        self.player.set("sub-delay", self.sub_offset)
+        self.current_idx = -1
+        if self.path:
+            self.statusBar().showMessage(f"Subtitle timing: {self.sub_offset:+.1f} s", 2000)
+
+    # ---- Whisper ------------------------------------------------------------------
+    def start_transcribe(self):
+        if not self.path:
+            self.statusBar().showMessage("Open a video first.", 3000)
+            return
+        if self.asr_job is not None:
+            return
+        video = Path(self.path)
+        existing = transcribe.find_existing_srt(self.cfg, video)
+        if existing and not self.selftest:
+            box = QMessageBox(QMessageBox.Question, "Whisper subtitles",
+                              "This video already has Whisper subtitles.", parent=self)
+            use = box.addButton("Use them", QMessageBox.AcceptRole)
+            again = box.addButton("Transcribe again", QMessageBox.DestructiveRole)
+            box.addButton(QMessageBox.Cancel)
+            box.exec()
+            if box.clickedButton() is use:
+                self.load_transcript(existing)
+                return
+            if box.clickedButton() is not again:
+                return
+        name = self.cfg.whisper.model
+        has_gpu = transcribe.gpu_count() > 0
+        need_cuda = has_gpu and not transcribe.cuda_libs_ready()
+        if (need_cuda or not transcribe.model_ready(name)) and not self.selftest:
+            dlg = WhisperSetupDialog(name, not transcribe.model_ready(name), need_cuda, has_gpu,
+                                     transcribe.model_ready, self)
+            if not dlg.exec():
+                return
+            name = dlg.model()
+            if name != self.cfg.whisper.model:
+                self.cfg.whisper.model = name
+                config.save_app(self.cfg)
+        need_model = not transcribe.model_ready(name)
+        cfg, audio_index = self.cfg, self._ff_index("audio")
+
+        def work(report, cancel):
+            if need_cuda:
+                transcribe.download_cuda_libs(report, cancel)
+            if need_model:
+                transcribe.download_model(name, report, cancel)
+            return {"srt": transcribe.transcribe(cfg, video, name, audio_index, report, cancel),
+                    "video": str(video)}
+
+        self.whisper_btn.hide()
+        self.asr_box.show()
+        self.asr_bar.setValue(0)
+        self.asr_label.setText("Starting Whisper…")
+        self.tabs.setCurrentIndex(0)
+        self.asr_job = self.runner.start(work, self._asr_done, self._asr_failed, self._asr_progress)
+
+    def _asr_progress(self, frac: float, text: str):
+        self.asr_bar.setValue(int(frac * 1000))
+        self.asr_label.setText(text)
+
+    def cancel_transcribe(self):
+        if self.asr_job is not None:
+            self.asr_job.cancel.set()
+            self.asr_label.setText("Cancelling…")
+
+    def _asr_finished(self):
+        self.asr_job = None
+        self.asr_box.hide()
+
+    def _asr_done(self, res: dict):
+        self._asr_finished()
+        self.asr_result = res
+        if self.path and os.path.normcase(self.path) == os.path.normcase(res["video"]):
+            self.load_transcript(res["srt"])
+        self.statusBar().showMessage(f"Whisper subtitles ready: {Path(res['srt']).name}", 8000)
+
+    def _asr_failed(self, err: str):
+        self._asr_finished()
+        self.whisper_btn.setVisible(not self.lines)
+        if err == "Cancelled":
+            self.statusBar().showMessage("Transcription cancelled.", 4000)
+            return
+        self.asr_result = {"error": err}
+        self._report("Whisper failed", err)
+
+    def load_transcript(self, srt):
+        self.prefer_sub_file = str(srt)
+        try:
+            self.player.mpv.command("sub-add", str(srt), "select", "Whisper (Japanese)", "ja")
+        except Exception as e:
+            self._report("Couldn't load the Whisper subtitles", str(e))
+
     # ---- export / settings --------------------------------------------------------
     def export_cards(self, everything: bool = False):
         cfg = self.cfg
@@ -635,6 +788,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         self.timer.stop()
+        self.runner.shutdown()
         self.player.shutdown()
         if self.audio_player is not None:
             try:

@@ -220,3 +220,39 @@ def test_app_settings_roundtrip(tmp_path):
     config.save_app(c, p)
     c2 = config.load_app(p)
     assert c2.claude.api_key == "sk-test" and c2.library_dir == tmp_path / "lib"
+
+
+def test_whisper_download_helpers(tmp_path, monkeypatch):
+    import io
+    import urllib.request
+    monkeypatch.setenv("VIDMINE_MODELS_DIR", str(tmp_path / "models"))
+    monkeypatch.setenv("VIDMINE_CUDA_DIR", str(tmp_path / "cuda"))
+    pypi = {"releases": {
+        "9.1.0.70": [{"filename": "nvidia_cudnn_cu12-9.1.0.70-py3-none-win_amd64.whl", "url": "https://x/u91", "size": 5}],
+        "9.10.2.21": [{"filename": "nvidia_cudnn_cu12-9.10.2.21-py3-none-win_amd64.whl", "url": "https://x/u910", "size": 7},
+                      {"filename": "nvidia_cudnn_cu12-9.10.2.21-py3-none-manylinux.whl", "url": "lin", "size": 7}],
+        "10.0.0": [{"filename": "nvidia_cudnn_cu12-10.0.0-py3-none-win_amd64.whl", "url": "u10", "size": 9}],
+        "9.11.0rc1": [{"filename": "nvidia_cudnn_cu12-9.11.0rc1-py3-none-win_amd64.whl", "url": "rc", "size": 9}],
+    }}
+    tree = [{"type": "file", "path": p, "size": 3} for p in
+            ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt", "README.md", ".gitattributes")]
+    monkeypatch.setattr(transcribe, "_get_json", lambda url: pypi if "pypi" in url else tree)
+    assert transcribe.cuda_wheels({"nvidia-cudnn-cu12": "9"}) == [("nvidia-cudnn-cu12", "https://x/u910", 7)]
+    assert sorted(p for p, _ in transcribe.model_files("tiny")) == \
+        ["config.json", "model.bin", "tokenizer.json", "vocabulary.txt"]
+
+    # Fake wheel: only nvidia/*/bin/*.dll members are extracted.
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("nvidia/cudnn/bin/cudnn64_9.dll", b"dll")
+        z.writestr("nvidia/cudnn/include/cudnn.h", b"h")
+
+    class Resp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=0: Resp(buf.getvalue()))
+    transcribe.download_cuda_libs(packages={"nvidia-cudnn-cu12": "9"})
+    assert sorted(p.name for p in (tmp_path / "cuda").iterdir()) == ["cudnn64_9.dll"]
+    seen = []
+    transcribe.download_model("tiny", progress=lambda f, t: seen.append(f))
+    assert transcribe.model_ready("tiny") and seen[-1] == 1.0

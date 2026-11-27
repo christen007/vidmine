@@ -42,7 +42,7 @@ class SettingsDialog(QDialog):
         kl.addWidget(self.key)
         kl.addWidget(show)
         form.addRow("Claude API key", key_row)
-        hint = QLabel('Create one at <a href="https://console.anthropic.com/settings/keys">console.anthropic.com</a>. '
+        hint = QLabel('Create one at <a href="https://platform.claude.com/settings/keys">platform.claude.com</a>. '
                       "It's stored only on this PC.")
         hint.setOpenExternalLinks(True)
         hint.setWordWrap(True)
@@ -75,6 +75,13 @@ class SettingsDialog(QDialog):
         self.padding.setValue(cfg.audio.padding_ms)
         form.addRow("Audio padding", self.padding)
 
+        self.whisper = QComboBox()
+        self.whisper.addItem("Best accuracy (large-v3)", "large-v3")
+        self.whisper.addItem("Faster (large-v3-turbo)", "large-v3-turbo")
+        i = self.whisper.findData(cfg.whisper.model)
+        self.whisper.setCurrentIndex(max(0, i))
+        form.addRow("Whisper model", self.whisper)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
         buttons.rejected.connect(self.reject)
@@ -102,5 +109,6 @@ class SettingsDialog(QDialog):
         c.export_dir = Path(exp) if exp else None
         c.claude.grammar_seed_files = [self.seed.text().strip()] if self.seed.text().strip() else []
         c.audio.padding_ms = self.padding.value()
+        c.whisper.model = self.whisper.currentData()
         config.save_app(c)
         self.accept()

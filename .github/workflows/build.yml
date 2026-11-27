@@ -15,9 +15,9 @@ jobs:
       GITHUB_TOKEN: ${{ github.token }}
       PYTHONUTF8: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -54,6 +54,27 @@ jobs:
             $log = "$env:APPDATA\VidMine\vidmine.log"
             if (Test-Path $log) { $json += "`n--- log ---`n" + ((Get-Content $log -Tail 60) -join "`n") }
             Write-Output ("::error title=Self-test failed (exit $($p.ExitCode))::" + ($json -replace "`r?`n", '%0A'))
+            exit 1
+          }
+
+      - name: Self-test Whisper (speech recognition)
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Speech
+          $s = New-Object System.Speech.Synthesis.SpeechSynthesizer
+          $s.SetOutputToWaveFile("$PWD\speech.wav")
+          $s.Speak("Good morning. The weather is very nice today. Let's walk around the festival together.")
+          $s.Dispose()
+          deps\ffmpeg.exe -hide_banner -loglevel error -y -f lavfi -i color=c=navy:s=640x360:r=24 -i speech.wav -shortest -c:v libx264 -preset ultrafast -c:a aac speech.mkv
+          $out = "$PWD\whisper.json"
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process -FilePath dist\VidMine\VidMine.exe -ArgumentList '--selftest-whisper', "`"$out`"", "`"$PWD\speech.mkv`"" -Wait -PassThru
+          if (Test-Path $out) { $json = Get-Content $out -Raw } else { $json = "no whisper.json written" }
+          Write-Output $json
+          if ($p.ExitCode -ne 0) {
+            $log = "$env:APPDATA\VidMine\vidmine.log"
+            if (Test-Path $log) { $json += "`n--- log ---`n" + ((Get-Content $log -Tail 60) -join "`n") }
+            Write-Output ("::error title=Whisper self-test failed (exit $($p.ExitCode))::" + ($json -replace "`r?`n", '%0A'))
             exit 1
           }
 

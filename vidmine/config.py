@@ -89,6 +89,7 @@ APP_SETTINGS_FIELDS = {
     "model": ("claude", "model"),
     "grammar_seed_files": ("claude", "grammar_seed_files"),
     "padding_ms": ("audio", "padding_ms"),
+    "whisper_model": ("whisper", "model"),
 }
 
 

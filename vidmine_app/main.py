@@ -45,6 +45,9 @@ def main() -> int:
     locale.setlocale(locale.LC_NUMERIC, "C")  # libmpv requires this
 
     args = sys.argv[1:]
+    if args[:1] == ["--selftest-whisper"]:
+        from .selftest import run_whisper
+        return run_whisper(app, Path(args[1]), Path(args[2]))
     if args[:1] == ["--selftest"]:
         from .selftest import run
         return run(app, Path(args[1]) if len(args) > 1 else Path("selftest.json"))

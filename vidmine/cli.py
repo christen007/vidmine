@@ -109,14 +109,19 @@ def cmd_status(cfg, args) -> int:
 
 
 def cmd_transcribe(cfg, args) -> int:
-    from .transcribe import srt_path_for, transcribe
+    from .transcribe import download_model, model_ready, srt_path_for, transcribe
     existing = srt_path_for(Path(args.video))
     if existing.exists() and not args.force:
         print(f"Using existing {existing} (--force to redo)", file=sys.stderr)
         emit({"ok": True, "path": str(existing), "cached": True})
         return 0
     try:
-        out = transcribe(cfg, Path(args.video), args.model)
+        name = args.model or cfg.whisper.model
+        if not model_ready(name):
+            print(f"Downloading Whisper {name}…", file=sys.stderr)
+            download_model(name)
+        out = transcribe(cfg, Path(args.video), name,
+                         progress=lambda f, t: print(f"\r{t}", end="", file=sys.stderr))
     except Exception as e:
         emit({"ok": False, "error": str(e)})
         return 1
