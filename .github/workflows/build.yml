@@ -52,7 +52,7 @@ jobs:
           Write-Output $json
           if ($p.ExitCode -ne 0) {
             $log = "$env:APPDATA\VidMine\vidmine.log"
-            if (Test-Path $log) { $json += "`n--- log ---`n" + (Get-Content $log -Tail 40 -Raw) }
+            if (Test-Path $log) { $json += "`n--- log ---`n" + ((Get-Content $log -Tail 60) -join "`n") }
             Write-Output ("::error title=Self-test failed (exit $($p.ExitCode))::" + ($json -replace "`r?`n", '%0A'))
             exit 1
           }

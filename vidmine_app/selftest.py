@@ -57,6 +57,18 @@ def run(app, out_path: Path) -> int:
         raise TimeoutError(f"timed out waiting for {what}")
 
     win = None
+
+    def diag():
+        if win is None:
+            return {}
+        tl = win.player.get("track-list", [])
+        return {"path": win.player.get("path"), "time_pos": win.player.get("time-pos"),
+                "tracks": [{k: t.get(k) for k in ("id", "type", "lang", "codec", "ff-index", "external")}
+                           for t in tl],
+                "win_path": win.path, "ja": win.ja_combo.currentText(), "en": win.en_combo.currentText(),
+                "hint": win.lines_hint.text(), "lines": len(win.lines), "en_lines": len(win.en_lines),
+                "busy": win.runner.busy, "last_error": win.last_error}
+
     try:
         os.environ["VIDMINE_FAKE_ANALYSIS"] = "1"
         tmp = Path(tempfile.mkdtemp(prefix="vidmine_selftest_"))
@@ -113,6 +125,10 @@ def run(app, out_path: Path) -> int:
         result["ok"] = True
     except Exception:
         result["error"] = traceback.format_exc()
+        try:
+            result["diag"] = diag()
+        except Exception:
+            result["diag_error"] = traceback.format_exc()
     finally:
         if win is not None:
             try:
