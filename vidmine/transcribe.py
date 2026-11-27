@@ -291,6 +291,16 @@ def write_srt(lines: list[tuple[float, float, str]], out: Path) -> None:
             f.write(f"{n}\n{_ts(s)} --> {_ts(e)}\n{text}\n\n")
 
 
+def _read_wav(path: Path):
+    """16 kHz mono 16-bit WAV -> float32 numpy array, the format Whisper expects."""
+    import wave
+
+    import numpy as np
+    with wave.open(str(path), "rb") as w:
+        data = w.readframes(w.getnframes())
+    return np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+
 def load_model(name: str, log: Progress | None = None):
     """Load on the GPU when possible, otherwise on the CPU. Returns (model, device, note)."""
     from faster_whisper import WhisperModel
@@ -323,11 +333,12 @@ def transcribe(cfg: Config, video: Path, model_name: str | None = None, audio_in
         # The selected audio track only (not an English dub), as 16 kHz mono.
         run_tool([cfg.ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(video),
                   "-map", f"0:{audio_index}" if audio_index is not None else "0:a:0",
-                  "-vn", "-sn", "-ac", "1", "-ar", "16000", str(wav)])
+                  "-vn", "-sn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(wav)])
         report(0.0, "Loading Whisper…")
         model, device, note = load_model(name)
+        audio = _read_wav(wav)  # decoded ourselves: avoids PyAV version mismatches
         segments, info = model.transcribe(
-            str(wav), language=language, beam_size=cfg.whisper.beam_size, word_timestamps=True,
+            audio, language=language, beam_size=cfg.whisper.beam_size, word_timestamps=True,
             vad_filter=True, condition_on_previous_text=False,
             initial_prompt=JA_PROMPT if language == "ja" else None)
         where = "GPU" if device == "cuda" else "CPU"

@@ -37,7 +37,7 @@ VidMine gets the Japanese text from one of three places:
 - **Inside the video:** many `.mkv` files include a Japanese track. It's picked automatically, and you can switch tracks under the video.
 - **A separate file:** put it next to the video with the same name plus `.ja`, e.g. `Episode 03.mkv` and `Episode 03.ja.srt`. `.srt`, `.ass` and `.vtt` files all work. [Jimaku](https://jimaku.cc) has Japanese subtitles for many anime and dramas.
 - **Whisper:** for any video with no Japanese subtitles, click **🎙 Transcribe audio**. Whisper listens to the Japanese audio and writes Japanese subtitles (it transcribes; it doesn't translate). On an NVIDIA graphics card, a 24-minute episode takes a few minutes, and you can keep watching while it works.
-  - The first time, it downloads the Whisper model (about 3 GB for the most accurate one) and, on NVIDIA PCs, NVIDIA's GPU libraries. Downloads are saved, so this only happens once.
+  - The first time, it downloads the Whisper model (about 3.1 GB for the most accurate one, 1.6 GB for the faster one) and, on NVIDIA PCs, NVIDIA's GPU libraries (about 1.3 GB). Downloads are saved, so this only happens once.
   - The transcript is saved next to the video as `<name>.ja.whisper.srt` and loads automatically next time.
   - Whisper is very good at Japanese but can occasionally mishear a word. Cards mined from it are marked as speech recognition, and Claude flags words that look misheard.
 

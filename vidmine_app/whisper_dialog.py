@@ -5,10 +5,10 @@ from PySide6.QtWidgets import (QButtonGroup, QDialog, QDialogButtonBox, QLabel, 
                                QVBoxLayout)
 
 MODEL_CHOICES = [
-    ("large-v3", "Best accuracy (recommended)", "about 3 GB"),
+    ("large-v3", "Best accuracy (recommended)", "about 3.1 GB"),
     ("large-v3-turbo", "Faster, slightly less accurate", "about 1.6 GB"),
 ]
-CUDA_SIZE = "about 1.5 GB"
+CUDA_SIZE = "about 1.3 GB"
 
 
 class WhisperSetupDialog(QDialog):
