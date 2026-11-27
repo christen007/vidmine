@@ -48,6 +48,10 @@ class SettingsDialog(QDialog):
         hint.setWordWrap(True)
         form.addRow("", hint)
 
+        self.workspace = QLineEdit(cfg.claude.workspace_id)
+        self.workspace.setPlaceholderText("Found automatically when you save (wrkspc_…)")
+        form.addRow("Workspace ID", self.workspace)
+
         self.model = QComboBox()
         self.model.setEditable(True)
         self.model.addItems(MODELS)
@@ -104,26 +108,32 @@ class SettingsDialog(QDialog):
         from PySide6.QtCore import Qt
         from PySide6.QtWidgets import QApplication, QMessageBox
 
-        from vidmine.analyze import check_key, clean_key
+        from vidmine.analyze import clean_key, find_working_setup
         c = self.cfg
         key = clean_key(self.key.text())
-        if key and key != c.claude.api_key:
+        ws = self.workspace.text().strip()
+        if key and (key != c.claude.api_key or ws != c.claude.workspace_id or not ws):
             if not key.startswith("sk-ant-"):
                 QMessageBox.warning(self, "Claude API key", "That doesn't look like a Claude API key. "
                                     "Keys start with sk-ant- and come from platform.claude.com/settings/keys.")
                 return
             QApplication.setOverrideCursor(Qt.WaitCursor)
             try:
-                ok, why = check_key(key)
+                ok, ws, why = find_working_setup(key, ws, self.model.currentText().strip() or MODELS[0])
             finally:
                 QApplication.restoreOverrideCursor()
             if ok is False:
-                QMessageBox.warning(self, "Claude API key", why + "\n\nCreate a new key at "
-                                    "platform.claude.com/settings/keys, copy it with the copy button, "
-                                    "and paste it here.")
+                QMessageBox.warning(self, "Claude API key", why + "\n\nIf this is a personal key "
+                                    "(sk-ant-usr-…), the easiest fix is to create a new key and choose a "
+                                    "workspace (e.g. Default) when creating it. Or paste your workspace ID "
+                                    "(wrkspc_…) into the Workspace ID box.")
                 return
             if ok is None:
                 QMessageBox.information(self, "Claude API key", why + "\nThe key is saved anyway.")
+            elif why:
+                QMessageBox.information(self, "Claude API key", "Key accepted. " + why)
+            self.workspace.setText(ws)
+        c.claude.workspace_id = ws
         c.claude.api_key = key
         c.claude.model = self.model.currentText().strip() or MODELS[0]
         c.library_dir = Path(self.library.text().strip() or config.Config().library_dir)

@@ -265,3 +265,31 @@ def test_clean_key_and_segment_splitting():
     # a short fragment isn't cut off on its own just because of a pause
     words = [(0.0, 0.3, "卵"), (1.5, 2.4, "も買います")]
     assert transcribe.split_words(words) == [(0.0, 2.4, "卵も買います")]
+
+
+def test_auth_headers_and_workspace_discovery(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+    seen = []
+
+    class Resp(io.BytesIO):
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    def fake_urlopen(req, timeout=0):
+        h = {k.lower(): v for k, v in req.header_items()}
+        seen.append((req.full_url, h))
+        if "workspaces" in req.full_url:
+            return Resp(json.dumps({"data": [{"id": "wrkspc_other", "name": "Other"},
+                                             {"id": "wrkspc_def", "name": "Default Workspace"}]}).encode())
+        if h.get("anthropic-workspace-id") == "wrkspc_def":
+            return Resp(b'{"input_tokens": 5}')
+        raise urllib.error.HTTPError(req.full_url, 401, "x", {}, io.BytesIO(
+            b'{"error":{"type":"authentication_error","message":"workspace id required"}}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    ok, ws, msg = analyze.find_working_setup("sk-ant-usr-abc")
+    assert ok and ws == "wrkspc_def" and "Default Workspace" in msg
+    assert all(h["authorization"] == "Bearer sk-ant-usr-abc" and "x-api-key" not in h for _, h in seen)
+    assert any("count_tokens" in u for u, _ in seen)

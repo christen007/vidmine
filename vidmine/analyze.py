@@ -137,19 +137,66 @@ def clean_key(key: str) -> str:
     return "".join(key.split())
 
 
-def check_key(key: str) -> tuple[bool | None, str]:
-    """(True, '') if Anthropic accepts the key, (False, why) if rejected, (None, why) if unreachable."""
-    req = urllib.request.Request("https://api.anthropic.com/v1/models?limit=1", headers={
-        "x-api-key": key, "anthropic-version": "2023-06-01"})
+def api_headers(key: str, workspace_id: str = "") -> dict:
+    h = {"authorization": f"Bearer {key}", "anthropic-version": "2023-06-01",
+         "content-type": "application/json"}
+    if workspace_id:
+        h["anthropic-workspace-id"] = workspace_id
+    return h
+
+
+def _error_message(e: urllib.error.HTTPError) -> str:
+    try:
+        return json.loads(e.read().decode("utf-8", "replace"))["error"]["message"]
+    except Exception:
+        return f"HTTP {e.code}"
+
+
+def check_key(key: str, workspace_id: str = "", model: str = "claude-sonnet-5-5") -> tuple[bool | None, str]:
+    """(True, '') if Anthropic accepts the key, (False, why) if rejected, (None, why) if unreachable.
+    Uses the free token-counting endpoint, which is authorized exactly like a real request."""
+    body = json.dumps({"model": model, "messages": [{"role": "user", "content": "こんにちは"}]}).encode()
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages/count_tokens", data=body,
+                                 headers=api_headers(key, workspace_id), method="POST")
     try:
         with urllib.request.urlopen(req, timeout=15):
             return True, ""
     except urllib.error.HTTPError as e:
-        if e.code in (401, 403):
-            return False, "Anthropic rejected this key (it's invalid, incomplete or was deleted)."
-        return None, f"Couldn't check the key right now (HTTP {e.code})."
+        msg = _error_message(e)
+        if e.code in (400, 401, 403, 404):
+            return False, f"Anthropic rejected this key: {msg}"
+        return None, f"Couldn't check the key right now ({msg})."
     except Exception as e:
         return None, f"Couldn't reach Anthropic to check the key ({e})."
+
+
+def list_workspaces(key: str) -> list[tuple[str, str]]:
+    """(id, name) of the workspaces a personal key can use, Default Workspace first.
+    Empty if the key isn't allowed to list them."""
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/organizations/workspaces?include_default=true&limit=100",
+        headers=api_headers(key))
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read().decode("utf-8")).get("data", [])
+    except Exception:
+        return []
+    out = [(w["id"], w.get("name") or w["id"]) for w in data if w.get("id") and not w.get("archived_at")]
+    out.sort(key=lambda w: 0 if "default" in w[1].lower() else 1)
+    return out
+
+
+def find_working_setup(key: str, workspace_id: str = "", model: str = "claude-sonnet-5-5"
+                       ) -> tuple[bool | None, str, str]:
+    """Check a key; if it needs a workspace, find one it works with.
+    Returns (ok, workspace_id_to_use, message)."""
+    ok, why = check_key(key, workspace_id, model)
+    if ok is not False:
+        return ok, workspace_id, why
+    for ws_id, name in list_workspaces(key):
+        if ws_id != workspace_id and check_key(key, ws_id, model)[0]:
+            return True, ws_id, f"Using workspace “{name}”."
+    return False, workspace_id, why
 
 
 def call_claude(cfg: Config, user_message: str) -> dict:
@@ -166,7 +213,7 @@ def call_claude(cfg: Config, user_message: str) -> dict:
         "tool_choice": {"type": "tool", "name": "record_card"},
         "messages": [{"role": "user", "content": user_message}],
     }).encode("utf-8")
-    headers = {"x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json"}
+    headers = api_headers(key, cfg.claude.workspace_id)
     last = ""
     for attempt in range(4):
         req = urllib.request.Request(API_URL, data=body, headers=headers, method="POST")
@@ -180,10 +227,14 @@ def call_claude(cfg: Config, user_message: str) -> dict:
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")
             last = f"HTTP {e.code}: {detail[:300]}"
-            if e.code == 401:
-                raise AnalysisError("Your Claude API key was rejected (it's invalid or was deleted). "
-                                    "Open Settings, paste a new key from platform.claude.com/settings/keys, "
-                                    "then use Retry analysis.")
+            if e.code == 401 or (e.code == 400 and "workspace" in detail.lower()):
+                try:
+                    msg = json.loads(detail)["error"]["message"]
+                except Exception:
+                    msg = detail[:200]
+                raise AnalysisError(f"Your Claude API key was rejected ({msg}). Open Settings and "
+                                    "click Save: VidMine re-checks the key and finds your workspace. "
+                                    "Then use Retry analysis.")
             if e.code == 400 and "credit balance" in detail.lower():
                 raise AnalysisError("Your Claude API account is out of credits. Add credits at "
                                     "platform.claude.com/settings/billing, then use Retry analysis.")
