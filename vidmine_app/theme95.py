@@ -282,6 +282,7 @@ QStatusBar {{ background: {FACE}; padding: 1px 2px; }}
 QStatusBar::item {{ border: none; }}
 QLabel#panel95 {{ border-image: {u('thin')} 1 1 1 1 stretch stretch; border-width: 1px; padding: 1px 4px; }}
 
+QFrame#video95 {{ {field} background: black; }}
 QSplitter::handle {{ background: {FACE}; }}
 QSplitter::handle:horizontal {{ width: 6px; }}
 QSplitter::handle:vertical {{ height: 6px; }}
@@ -322,6 +323,18 @@ def content_font(size_px: int = 15):
     f.setPixelSize(size_px)
     f.setStyleStrategy(QFont.PreferAntialias)
     return f
+
+
+_SWAPS = {"⏮ Line": "<< Line", "Line ⏭": "Line >>", "▶ Play": "Play", "⏸ Pause": "Pause"}
+_EMOJI = __import__("re").compile("[\u2190-\u21ff\u2300-\u23ff\u25a0-\u25ff\u2600-\u27bf\U0001F000-\U0001FAFF\uFE0F]")
+
+
+def t95(text: str) -> str:
+    """Windows 95 had no emoji: use plain labels in the Win95 theme."""
+    if not _active:
+        return text
+    text = _SWAPS.get(text, text)
+    return " ".join(_EMOJI.sub("", text).split())
 
 
 def asset(name: str) -> str:

@@ -178,7 +178,7 @@ class MainWindow(FrameMixin, QMainWindow):
                                  "Create Japanese subtitles from the audio with Whisper"),
                                 ("Export for Kaeru", self.export_cards, "Save new cards as a zip for Kaeru"),
                                 ("Settings", self.open_settings, "API key and folders")):
-            act = QAction(text, self)
+            act = QAction(theme95.t95(text), self)
             act.setToolTip(tip)
             act.triggered.connect(slot)
             tb.addAction(act)
@@ -195,7 +195,7 @@ class MainWindow(FrameMixin, QMainWindow):
         seek_row.addWidget(self.time_label)
 
         def button(text, slot, tip):
-            b = QPushButton(text)
+            b = QPushButton(theme95.t95(text))
             b.setFocusPolicy(Qt.NoFocus)
             b.setToolTip(tip)
             b.clicked.connect(slot)
@@ -266,7 +266,16 @@ class MainWindow(FrameMixin, QMainWindow):
         left = QWidget()
         ll = QVBoxLayout(left)
         ll.setContentsMargins(6, 6, 6, 6)
-        ll.addWidget(self.player, 1)
+        if theme95.active():  # Win95 media players sat in a sunken frame
+            from PySide6.QtWidgets import QFrame
+            box = QFrame()
+            box.setObjectName("video95")
+            bl = QVBoxLayout(box)
+            bl.setContentsMargins(2, 2, 2, 2)
+            bl.addWidget(self.player)
+            ll.addWidget(box, 1)
+        else:
+            ll.addWidget(self.player, 1)
         self.controls_box = QWidget()
         cl = QVBoxLayout(self.controls_box)
         cl.setContentsMargins(0, 0, 0, 0)
@@ -283,6 +292,7 @@ class MainWindow(FrameMixin, QMainWindow):
         self.lines_hint.setWordWrap(True)
         self.line_list = QListWidget()
         self.line_list.setFocusPolicy(Qt.NoFocus)
+        self.line_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.line_list.setWordWrap(True)
         if theme95.active():
             self.line_list.setFont(theme95.content_font(16))
@@ -294,7 +304,7 @@ class MainWindow(FrameMixin, QMainWindow):
         self.line_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.line_list.customContextMenuRequested.connect(self._line_menu)
         lp.addWidget(self.lines_hint)
-        self.whisper_btn = QPushButton("🎙  Create Japanese subtitles from the audio (Whisper)")
+        self.whisper_btn = QPushButton(theme95.t95("🎙  Create Japanese subtitles from the audio (Whisper)"))
         self.whisper_btn.setFocusPolicy(Qt.NoFocus)
         self.whisper_btn.setStyleSheet("QPushButton{padding:8px;font-weight:bold;}")
         self.whisper_btn.clicked.connect(self.start_transcribe)
@@ -475,8 +485,8 @@ class MainWindow(FrameMixin, QMainWindow):
             QListWidgetItem(f"{fmt_time(l.start)}   {l.text.replace(chr(10), '　')}", self.line_list)
         src = ("Whisper transcript. Words may occasionally be misheard. "
                if (self.ja_track or {}).get("external-filename", "").lower().endswith(".whisper.srt") else "")
-        self.lines_hint.setText(f"{len(lines)} Japanese lines. {src}Press M (or ⛏ Mine line) to mine "
-                                "the current one.")
+        self.lines_hint.setText(theme95.t95(f"{len(lines)} Japanese lines. {src}Press M (or ⛏ Mine line) "
+                                            "to mine the current one."))
 
     def _ja_failed(self, token: int, err: str):
         if token == self.ja_token:
@@ -504,7 +514,7 @@ class MainWindow(FrameMixin, QMainWindow):
         t = self.player.get("time-pos")
         dur = self.player.get("duration")
         paused = self.player.get("pause", True)
-        self.play_btn.setText("▶ Play" if paused else "⏸ Pause")
+        self.play_btn.setText(theme95.t95("▶ Play" if paused else "⏸ Pause"))
         if t is None:
             return
         if dur:
@@ -686,7 +696,7 @@ class MainWindow(FrameMixin, QMainWindow):
         meta = (card or {}).get("_vidmine", {})
         has_video = bool(meta.get("video")) and Path(meta.get("video", "")).exists()
         can_make = bool(card) and meta.get("status") == STATUS_READY
-        self.video_btn.setText("🎬 Play video" if has_video else "🎬 Make video")
+        self.video_btn.setText(theme95.t95("🎬 Play video" if has_video else "🎬 Make video"))
         self.video_btn.setEnabled(has_video or can_make)
         self.folder_btn.setEnabled(has_video)
         if not card:
