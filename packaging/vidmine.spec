@@ -8,7 +8,7 @@ deps = root / "deps"
 
 binaries = [(str(deps / "libmpv-2.dll"), "."), (str(deps / "ffmpeg.exe"), ".")]
 binaries += collect_dynamic_libs("ctranslate2")
-datas = [(str(root / "KAERU_VIDEO_IMPORT_SPEC.md"), ".")]
+datas = [(str(root / "KAERU_VIDEO_IMPORT_SPEC.md"), "."), (str(root / "packaging" / "icon.ico"), ".")]
 datas += collect_data_files("faster_whisper")  # includes the Silero VAD model
 for font in (deps / "NotoSansJP-Bold.otf", deps / "NotoSansJP-Regular.otf"):
     if font.exists():

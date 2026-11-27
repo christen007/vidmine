@@ -9,12 +9,14 @@ from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog,
                                QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QMainWindow, QMenu,
-                               QMessageBox, QProgressBar, QPushButton, QSlider, QSplitter,
+                               QProgressBar, QPushButton, QSlider, QSplitter,
                                QTabWidget, QTextBrowser, QVBoxLayout, QWidget)
 
 from vidmine import config, export, mine, subs, transcribe
 from vidmine.store import STATUS_READY, Library
 
+from . import theme95
+from .frame95 import FrameMixin, StatusBar95, TitleBar, app_icon, msg
 from .player import MpvWidget
 from .preview import card_html
 from .settings_dialog import SettingsDialog
@@ -71,7 +73,7 @@ def track_label(t: dict) -> str:
     return " ".join(bits)
 
 
-class MainWindow(QMainWindow):
+class MainWindow(FrameMixin, QMainWindow):
     def __init__(self, cfg: config.Config, headless: bool = False, selftest: bool = False):
         super().__init__()
         self.cfg = cfg
@@ -97,6 +99,9 @@ class MainWindow(QMainWindow):
         self.prefer_sub_file: str | None = None
 
         self.setWindowTitle("VidMine")
+        self.setWindowIcon(app_icon())
+        self.init_frame()
+        self.setStatusBar(StatusBar95(self))
         self.resize(1400, 820)
         self.setAcceptDrops(True)
         self._build_ui()
@@ -110,7 +115,61 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Welcome! Add your Claude API key in Settings, then open a video.")
 
     # ---- UI --------------------------------------------------------------------
+    def _build_menus(self):
+        from PySide6.QtWidgets import QMenuBar
+        bar = QMenuBar()
+
+        def menu(title, items):
+            m = bar.addMenu(title)
+            for item in items:
+                if item is None:
+                    m.addSeparator()
+                    continue
+                text, slot = item
+                act = QAction(text, self)  # "\t" shows the key; the shortcut itself is global
+                act.triggered.connect(slot)
+                m.addAction(act)
+            return m
+
+        menu("&File", [("&Open video…\tCtrl+O", self.choose_file),
+                       ("&Export for Kaeru", lambda: self.export_cards()),
+                       ("Export &all cards again", lambda: self.export_cards(everything=True)),
+                       None, ("E&xit", self.close)])
+        menu("&View", [("&Full screen\tF", lambda: self.toggle_fullscreen()),
+                       ("Show &English subtitles\tE", lambda: self.show_en.toggle()),
+                       ("&Cards", lambda: self.tabs.setCurrentIndex(1))])
+        menu("&Tools", [("&Transcribe audio (Whisper)", self.start_transcribe),
+                        ("Open card &videos folder", self.open_videos_folder),
+                        None, ("&Settings…", self.open_settings)])
+        menu("&Help", [("&Keyboard shortcuts", self.show_shortcuts), ("&About VidMine", self.show_about)])
+        if self.framed:
+            top = QWidget()
+            tl = QVBoxLayout(top)
+            tl.setContentsMargins(0, 0, 0, 0)
+            tl.setSpacing(0)
+            self.titlebar = TitleBar(self)
+            tl.addWidget(self.titlebar)
+            tl.addWidget(bar)
+            self.setMenuWidget(top)
+        else:
+            self.setMenuBar(bar)
+
+    def show_shortcuts(self):
+        msg(self, "Keyboard shortcuts",
+            "Space\tPlay / pause\n←  →\tBack / forward 5 seconds\n↑  ↓\tPrevious / next line\n"
+            "R\tReplay the current line\nM\tMine the current line\nE\tShow / hide English\n"
+            "Z  X\tSubtitles 0.1 s earlier / later\nF\tFull screen (Esc to exit)\nCtrl+O\tOpen a video")
+
+    def show_about(self):
+        msg(self, "About VidMine", "VidMine\n\nSentence mining from Japanese video for Kaeru.\n"
+            "Each mined line becomes a Kaeru card and a card video.")
+
+    def open_videos_folder(self):
+        self.cfg.videos_dir.mkdir(parents=True, exist_ok=True)
+        self._open_path(str(self.cfg.videos_dir))
+
     def _build_ui(self):
+        self._build_menus()
         tb = self.addToolBar("Main")
         tb.setMovable(False)
         self.toolbar = tb
@@ -144,7 +203,12 @@ class MainWindow(QMainWindow):
 
         self.play_btn = button("▶ Play", self.toggle_pause, "Space")
         self.mine_btn = button("⛏  Mine line", self.mine_current, "M: mine the current Japanese line")
-        self.mine_btn.setStyleSheet("QPushButton{background:#3d7a4f;color:white;font-weight:bold;padding:4px 14px;}")
+        if theme95.active():
+            f = self.mine_btn.font()
+            f.setBold(True)
+            self.mine_btn.setFont(f)
+        else:
+            self.mine_btn.setStyleSheet("QPushButton{background:#3d7a4f;color:white;font-weight:bold;padding:4px 14px;}")
         controls = QHBoxLayout()
         controls.addWidget(self.play_btn)
         controls.addWidget(button("⏮ Line", lambda: self.step_line(-1), "Up arrow: previous line"))
@@ -220,8 +284,12 @@ class MainWindow(QMainWindow):
         self.line_list = QListWidget()
         self.line_list.setFocusPolicy(Qt.NoFocus)
         self.line_list.setWordWrap(True)
-        self.line_list.setStyleSheet("QListWidget{font-size:15px;} QListWidget::item{padding:5px;}"
-                                     "QListWidget::item:selected{background:#2d4a6b;color:white;}")
+        if theme95.active():
+            self.line_list.setFont(theme95.content_font(16))
+            self.line_list.setStyleSheet("QListWidget::item{padding:4px;}")
+        else:
+            self.line_list.setStyleSheet("QListWidget{font-size:15px;} QListWidget::item{padding:5px;}"
+                                         "QListWidget::item:selected{background:#2d4a6b;color:white;}")
         self.line_list.itemDoubleClicked.connect(lambda it: self.jump_to(self.line_list.row(it)))
         self.line_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.line_list.customContextMenuRequested.connect(self._line_menu)
@@ -490,7 +558,7 @@ class MainWindow(QMainWindow):
 
     def toggle_fullscreen(self, on: bool | None = None):
         on = (not self.isFullScreen()) if on is None else on
-        for w in (self.tabs, self.toolbar, self.statusBar(), self.controls_box):
+        for w in (self.tabs, self.toolbar, self.statusBar(), self.controls_box, self.menuWidget()):
             w.setVisible(not on)
         self.showFullScreen() if on else self.showNormal()
 
@@ -515,9 +583,9 @@ class MainWindow(QMainWindow):
     def _ensure_key(self) -> bool:
         if self.cfg.claude.resolved_key() or os.environ.get("VIDMINE_FAKE_ANALYSIS"):
             return True
-        QMessageBox.information(self, "Claude API key needed",
-                                "VidMine uses Claude to break each line down into words and grammar.\n"
-                                "Add your API key in the next window.")
+        msg(self, "Claude API key needed",
+            "VidMine uses Claude to break each line down into words and grammar.\n"
+            "Add your API key in the next window.")
         self.open_settings()
         return bool(self.cfg.claude.resolved_key())
 
@@ -573,7 +641,7 @@ class MainWindow(QMainWindow):
         self._update_cards_tab()
         self.statusBar().showMessage(f"Couldn't mine that line: {err}", 10000)
         if not self.selftest:
-            QMessageBox.warning(self, "Couldn't mine that line", err)
+            msg(self, "Couldn't mine that line", err, "warning")
 
     # ---- cards ------------------------------------------------------------------
     def library(self) -> Library:
@@ -583,6 +651,7 @@ class MainWindow(QMainWindow):
         n = self.card_list.count()
         extra = f" · mining {self.mining}…" if self.mining else ""
         self.tabs.setTabText(1, f"Cards ({n}){extra}")
+        self.statusBar().count.setText(f"{n} card(s)" + (f", mining {self.mining}" if self.mining else ""))
 
     def refresh_cards(self, select_id: str | None = None):
         try:
@@ -716,8 +785,8 @@ class MainWindow(QMainWindow):
         card = self.selected_card()
         if not card:
             return
-        if QMessageBox.question(self, "Delete card", f"Delete this card?\n\n{card['sentence']}") \
-                != QMessageBox.Yes:
+        if msg(self, "Delete card", f"Delete this card?\n\n{card['sentence']}", "question",
+               ("Yes", "No"), default=1) != "Yes":
             return
         self.library().delete(card["id"])
         self.refresh_cards()
@@ -740,16 +809,12 @@ class MainWindow(QMainWindow):
         video = Path(self.path)
         existing = transcribe.find_existing_srt(self.cfg, video)
         if existing and not self.selftest:
-            box = QMessageBox(QMessageBox.Question, "Whisper subtitles",
-                              "This video already has Whisper subtitles.", parent=self)
-            use = box.addButton("Use them", QMessageBox.AcceptRole)
-            again = box.addButton("Transcribe again", QMessageBox.DestructiveRole)
-            box.addButton(QMessageBox.Cancel)
-            box.exec()
-            if box.clickedButton() is use:
+            choice = msg(self, "Whisper subtitles", "This video already has Whisper subtitles.",
+                         "question", ("Use them", "Transcribe again", "Cancel"))
+            if choice == "Use them":
                 self.load_transcript(existing)
                 return
-            if box.clickedButton() is not again:
+            if choice != "Transcribe again":
                 return
         name = self.cfg.whisper.model
         has_gpu = transcribe.gpu_count() > 0
@@ -829,24 +894,17 @@ class MainWindow(QMainWindow):
         if self.selftest:
             return
         if not res["count"]:
-            msg = "There are no new cards to export."
+            text = "There are no new cards to export."
             if res["skipped"]:
-                msg += f"\n\n{res['skipped']} card(s) still need analysis (see the Cards tab)."
-            box = QMessageBox(QMessageBox.Information, "Export for Kaeru", msg, parent=self)
-            again = box.addButton("Export all cards again", QMessageBox.ActionRole)
-            box.addButton(QMessageBox.Ok)
-            box.exec()
-            if box.clickedButton() is again:
+                text += f"\n\n{res['skipped']} card(s) still need analysis (see the Cards tab)."
+            if msg(self, "Export for Kaeru", text, "info", ("OK", "Export all cards again")) \
+                    == "Export all cards again":
                 self.export_cards(everything=True)
             return
         self.statusBar().showMessage(f"Exported {res['count']} cards.", 6000)
-        box = QMessageBox(QMessageBox.Information, "Export for Kaeru",
-                          f"Exported {res['count']} card(s) to:\n{res['path']}\n\n"
-                          "Import this zip in Kaeru's Mine tab.", parent=self)
-        open_btn = box.addButton("Show in folder", QMessageBox.ActionRole)
-        box.addButton(QMessageBox.Ok)
-        box.exec()
-        if box.clickedButton() is open_btn:
+        choice = msg(self, "Export for Kaeru", f"Exported {res['count']} card(s) to:\n{res['path']}\n\n"
+                     "Import this zip in Kaeru's Mine tab.", "info", ("OK", "Show in folder"))
+        if choice == "Show in folder":
             if sys.platform == "win32":
                 import subprocess
                 subprocess.Popen(["explorer", "/select,", res["path"]])
@@ -857,7 +915,7 @@ class MainWindow(QMainWindow):
         self.last_error = err
         self.statusBar().showMessage(f"{title}: {err}", 10000)
         if not self.selftest:
-            QMessageBox.warning(self, title, err)
+            msg(self, title, err, "warning")
 
     def open_settings(self):
         if SettingsDialog(self.cfg, self).exec():

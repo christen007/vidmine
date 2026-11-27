@@ -1,6 +1,7 @@
 """First-time Whisper setup: choose a model and confirm the one-time download."""
 from __future__ import annotations
 
+from .frame95 import Dialog95, msg
 from PySide6.QtWidgets import (QButtonGroup, QDialog, QDialogButtonBox, QLabel, QRadioButton,
                                QVBoxLayout)
 
@@ -11,13 +12,13 @@ MODEL_CHOICES = [
 CUDA_SIZE = "about 1.3 GB"
 
 
-class WhisperSetupDialog(QDialog):
+class WhisperSetupDialog(Dialog95):
     def __init__(self, current_model: str, need_model: bool, need_cuda: bool, has_gpu: bool,
                  model_ready, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Set up Whisper")
         self.setMinimumWidth(520)
-        lay = QVBoxLayout(self)
+        lay = QVBoxLayout(self.body)
         intro = QLabel(
             "<b>Whisper listens to the Japanese audio and writes Japanese subtitles</b> for this "
             "video, so you can mine it like any subtitled video. It writes down what's said; it "

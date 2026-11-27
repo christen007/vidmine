@@ -47,6 +47,7 @@ jobs:
         run: |
           $out = "$PWD\selftest.json"
           $env:QT_QPA_PLATFORM = "offscreen"
+          $env:VIDMINE_SCREENSHOTS = "$PWD\screenshots"
           $p = Start-Process -FilePath dist\VidMine\VidMine.exe -ArgumentList '--selftest', "`"$out`"" -Wait -PassThru
           if (Test-Path $out) { $json = Get-Content $out -Raw } else { $json = "no selftest.json written" }
           Write-Output $json
@@ -56,6 +57,14 @@ jobs:
             Write-Output ("::error title=Self-test failed (exit $($p.ExitCode))::" + ($json -replace "`r?`n", '%0A'))
             exit 1
           }
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: screenshots
+          path: screenshots
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Self-test Whisper (speech recognition)
         shell: pwsh

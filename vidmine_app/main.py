@@ -36,13 +36,24 @@ def main() -> int:
         sys.stdout = sys.stdout or log
         sys.stderr = sys.stderr or log
 
-    from PySide6.QtWidgets import QApplication, QMessageBox
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QApplication
 
+    from vidmine import config
+    cfg = config.load_app()
+    win95 = cfg.theme == "win95"
+    if win95:  # whole-number scaling keeps the pixel-art look crisp
+        QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.Round)
     app = QApplication(sys.argv)
     app.setApplicationName("VidMine")
     app.setStyle("Fusion")
+    if win95:
+        from . import theme95
+        theme95.apply(app)
     import locale
     locale.setlocale(locale.LC_NUMERIC, "C")  # libmpv requires this
+    from .frame95 import msg
 
     args = sys.argv[1:]
     if args[:1] == ["--selftest-whisper"]:
@@ -55,19 +66,18 @@ def main() -> int:
     def excepthook(etype, value, tb):
         text = "".join(traceback.format_exception(etype, value, tb))
         print(text, file=sys.stderr)
-        QMessageBox.critical(None, "VidMine error", f"{value}\n\nDetails were saved to:\n{_log_path()}")
+        msg(None, "VidMine error", f"{value}\n\nDetails were saved to:\n{_log_path()}", "error")
     sys.excepthook = excepthook
 
     try:
         import mpv  # noqa: F401
     except Exception as e:
-        QMessageBox.critical(None, "VidMine", f"The video engine (libmpv) could not be loaded:\n{e}")
+        msg(None, "VidMine", f"The video engine (libmpv) could not be loaded:\n{e}", "error")
         return 1
 
-    from vidmine import config
     from .window import MainWindow
 
-    win = MainWindow(config.load_app())
+    win = MainWindow(cfg)
     win.show()
     files = [a for a in args if not a.startswith("-") and Path(a).is_file()]
     if files:  # "Open with → VidMine" passes the file here

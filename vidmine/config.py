@@ -66,6 +66,7 @@ class Config:
     whisper: WhisperCfg = field(default_factory=WhisperCfg)
     video: VideoCfg = field(default_factory=VideoCfg)
     video_dir: Path | None = None  # default: <library_dir>/Videos
+    theme: str = "win95"  # "win95" or "modern"
 
     @property
     def exports(self) -> Path:
@@ -111,6 +112,7 @@ APP_SETTINGS_FIELDS = {
     "video_lead_s": ("video", "lead_s"),
     "video_tail_s": ("video", "tail_s"),
     "video_dir": (None, "video_dir"),
+    "theme": (None, "theme"),
 }
 
 

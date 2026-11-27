@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .frame95 import Dialog95, msg
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox,
                                QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QPushButton, QSpinBox, QVBoxLayout, QWidget)
@@ -23,7 +24,7 @@ def _path_row(edit: QLineEdit, pick) -> QWidget:
     return w
 
 
-class SettingsDialog(QDialog):
+class SettingsDialog(Dialog95):
     def __init__(self, cfg: config.Config, parent=None):
         super().__init__(parent)
         self.cfg = cfg
@@ -89,6 +90,12 @@ class SettingsDialog(QDialog):
         self.whisper.setCurrentIndex(max(0, i))
         form.addRow("Whisper model", self.whisper)
 
+        self.theme = QComboBox()
+        self.theme.addItem("Windows 95", "win95")
+        self.theme.addItem("Modern", "modern")
+        self.theme.setCurrentIndex(max(0, self.theme.findData(cfg.theme)))
+        form.addRow("Appearance", self.theme)
+
         self.video_on = QCheckBox("Also make a video for each mined line (clip + lesson panel)")
         self.video_on.setChecked(cfg.video.enabled)
         form.addRow("Card videos", self.video_on)
@@ -115,7 +122,7 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.save)
         buttons.rejected.connect(self.reject)
-        lay = QVBoxLayout(self)
+        lay = QVBoxLayout(self.body)
         lay.addLayout(form)
         lay.addWidget(buttons)
 
@@ -144,14 +151,13 @@ class SettingsDialog(QDialog):
             QApplication.restoreOverrideCursor()
 
     def test_connection(self):
-        from PySide6.QtWidgets import QMessageBox
         from vidmine.analyze import clean_key, key_problem
         key = clean_key(self.key.text())
         if not key:
-            QMessageBox.information(self, "Test connection", "Paste your API key first.")
+            msg(self, "Test connection", "Paste your API key first.")
             return
         if key_problem(key):
-            QMessageBox.warning(self, "Test connection", key_problem(key))
+            msg(self, "Test connection", key_problem(key), "warning")
             return
         _key, (ok, ws, auth, msg, report) = self._run_check()
         verdict = ("✓ Working. Click Save to keep these settings." + (f" {msg}" if msg else "")
@@ -162,7 +168,6 @@ class SettingsDialog(QDialog):
         ReportDialog(verdict, "\n".join(report), self).exec()
 
     def save(self):
-        from PySide6.QtWidgets import QMessageBox
 
         from vidmine.analyze import clean_key, key_problem
         c = self.cfg
@@ -171,20 +176,20 @@ class SettingsDialog(QDialog):
         auth = getattr(self, "_auth", c.claude.auth)
         if key and (key != c.claude.api_key or ws != c.claude.workspace_id or not getattr(self, "_auth", None)):
             if key_problem(key):
-                QMessageBox.warning(self, "Claude API key", key_problem(key))
+                msg(self, "Claude API key", key_problem(key), "warning")
                 return
             key, (ok, ws, auth, why, report) = self._run_check()
             if ok is False and "no credits" in why:
                 # The key itself works; save it and just warn about the balance.
-                QMessageBox.warning(self, "Claude API key", "Key accepted and saved. However: " + why)
+                msg(self, "Claude API key", "Key accepted and saved. However: " + why, "warning")
             elif ok is False:
                 ReportDialog("✗ " + why + "\n\nThe settings were not saved. Fix the problem above, or "
                              "send the details below to get help.", "\n".join(report), self).exec()
                 return
             elif ok is None:
-                QMessageBox.information(self, "Claude API key", why + "\nThe key is saved anyway.")
+                msg(self, "Claude API key", why + "\nThe key is saved anyway.")
             elif why:
-                QMessageBox.information(self, "Claude API key", "Key accepted. " + why)
+                msg(self, "Claude API key", "Key accepted. " + why)
             self.workspace.setText(ws)
         c.claude.api_key = key
         c.claude.workspace_id = ws
@@ -201,11 +206,16 @@ class SettingsDialog(QDialog):
         c.video.tail_s = self.tail.value()
         vd = self.videos.text().strip()
         c.video_dir = Path(vd) if vd and Path(vd) != c.library_dir / "Videos" else None
+        new_theme = self.theme.currentData()
+        theme_changed = new_theme != c.theme
+        c.theme = new_theme
         config.save_app(c)
+        if theme_changed:
+            msg(self, "Appearance", "The new appearance takes effect the next time you start VidMine.")
         self.accept()
 
 
-class ReportDialog(QDialog):
+class ReportDialog(Dialog95):
     """Shows a connection check result with copyable details (the key is shortened)."""
 
     def __init__(self, verdict: str, details: str, parent=None):
@@ -213,7 +223,7 @@ class ReportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Claude connection")
         self.setMinimumSize(640, 360)
-        lay = QVBoxLayout(self)
+        lay = QVBoxLayout(self.body)
         v = QLabel(verdict)
         v.setWordWrap(True)
         lay.addWidget(v)
