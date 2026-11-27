@@ -257,3 +257,11 @@ def test_whisper_download_helpers(tmp_path, monkeypatch):
     seen = []
     transcribe.download_model("tiny", progress=lambda f, t: seen.append(f))
     assert transcribe.model_ready("tiny") and seen[-1] == 1.0
+
+
+def test_clean_key_and_segment_splitting():
+    assert analyze.clean_key('  "sk-ant-abc\n123"  ') == "sk-ant-abc123"
+    assert analyze.clean_key("Bearer sk-ant-xyz") == "sk-ant-xyz"
+    # a short fragment isn't cut off on its own just because of a pause
+    words = [(0.0, 0.3, "卵"), (1.5, 2.4, "も買います")]
+    assert transcribe.split_words(words) == [(0.0, 2.4, "卵も買います")]

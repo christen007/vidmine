@@ -128,6 +128,30 @@ def fake_result(user_message: str) -> dict:
             "grammar": [{"id": "self-test", "pattern": "～", "explanation": "Self-test."}]}
 
 
+def clean_key(key: str) -> str:
+    """Tidy a pasted key: whitespace, quotes, a leading 'Bearer ' or 'x-api-key:'."""
+    key = key.strip().strip('"\'').strip()
+    for prefix in ("Bearer ", "x-api-key:", "ANTHROPIC_API_KEY="):
+        if key.lower().startswith(prefix.lower()):
+            key = key[len(prefix):].strip().strip('"\'')
+    return "".join(key.split())
+
+
+def check_key(key: str) -> tuple[bool | None, str]:
+    """(True, '') if Anthropic accepts the key, (False, why) if rejected, (None, why) if unreachable."""
+    req = urllib.request.Request("https://api.anthropic.com/v1/models?limit=1", headers={
+        "x-api-key": key, "anthropic-version": "2023-06-01"})
+    try:
+        with urllib.request.urlopen(req, timeout=15):
+            return True, ""
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            return False, "Anthropic rejected this key (it's invalid, incomplete or was deleted)."
+        return None, f"Couldn't check the key right now (HTTP {e.code})."
+    except Exception as e:
+        return None, f"Couldn't reach Anthropic to check the key ({e})."
+
+
 def call_claude(cfg: Config, user_message: str) -> dict:
     if os.environ.get("VIDMINE_FAKE_ANALYSIS"):
         return fake_result(user_message)
@@ -156,6 +180,13 @@ def call_claude(cfg: Config, user_message: str) -> dict:
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "replace")
             last = f"HTTP {e.code}: {detail[:300]}"
+            if e.code == 401:
+                raise AnalysisError("Your Claude API key was rejected (it's invalid or was deleted). "
+                                    "Open Settings, paste a new key from platform.claude.com/settings/keys, "
+                                    "then use Retry analysis.")
+            if e.code == 400 and "credit balance" in detail.lower():
+                raise AnalysisError("Your Claude API account is out of credits. Add credits at "
+                                    "platform.claude.com/settings/billing, then use Retry analysis.")
             if e.code not in (429, 500, 502, 503, 529):
                 break
         except (urllib.error.URLError, TimeoutError) as e:

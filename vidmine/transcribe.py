@@ -276,8 +276,8 @@ def split_words(words: list[tuple[float, float, str]]) -> list[tuple[float, floa
         nxt = words[i + 1] if i + 1 < len(words) else None
         gap = (nxt[0] - e) if nxt else 99
         dur = e - cur[0][0]
-        if (text.endswith(SENTENCE_END) or gap > 0.8 or len(text) >= 45 or dur > 8
-                or (len(text) >= 28 and text.endswith("、"))):
+        if (text.endswith(SENTENCE_END) or (gap > 0.8 and len(text) >= 4) or len(text) >= 45
+                or dur > 8 or (len(text) >= 28 and text.endswith("、"))):
             lines.append((cur[0][0], e, text))
             cur = []
     if cur:
@@ -342,18 +342,19 @@ def transcribe(cfg: Config, video: Path, model_name: str | None = None, audio_in
             vad_filter=True, condition_on_previous_text=False,
             initial_prompt=JA_PROMPT if language == "ja" else None)
         where = "GPU" if device == "cuda" else "CPU"
-        words: list[tuple[float, float, str]] = []
+        lines: list[tuple[float, float, str]] = []
         for seg in segments:
             if cancel is not None and cancel.is_set():
                 raise Cancelled()
+            # Whisper's segments follow the speaker's pauses, so a line never spans two of them;
+            # long segments are split further at punctuation and pauses.
             if seg.words:
-                words.extend((w.start, w.end, w.word) for w in seg.words)
+                lines.extend(split_words([(w.start, w.end, w.word) for w in seg.words]))
             elif seg.text.strip():
-                words.append((seg.start, seg.end, seg.text))
+                lines.extend(split_words([(seg.start, seg.end, seg.text)]))
             frac = min(1.0, seg.end / info.duration) if info.duration else 0.0
             report(frac, f"Transcribing on the {where}: {_ts(seg.end)[:8]} / {_ts(info.duration)[:8]}"
                          + (f" — {note}" if note else ""))
-    lines = split_words(words)
     out = srt_path_for(video)
     try:
         write_srt(lines, out)

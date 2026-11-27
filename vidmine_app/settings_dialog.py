@@ -101,8 +101,30 @@ class SettingsDialog(QDialog):
             self.seed.setText(f)
 
     def save(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        from vidmine.analyze import check_key, clean_key
         c = self.cfg
-        c.claude.api_key = self.key.text().strip()
+        key = clean_key(self.key.text())
+        if key and key != c.claude.api_key:
+            if not key.startswith("sk-ant-"):
+                QMessageBox.warning(self, "Claude API key", "That doesn't look like a Claude API key. "
+                                    "Keys start with sk-ant- and come from platform.claude.com/settings/keys.")
+                return
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+            try:
+                ok, why = check_key(key)
+            finally:
+                QApplication.restoreOverrideCursor()
+            if ok is False:
+                QMessageBox.warning(self, "Claude API key", why + "\n\nCreate a new key at "
+                                    "platform.claude.com/settings/keys, copy it with the copy button, "
+                                    "and paste it here.")
+                return
+            if ok is None:
+                QMessageBox.information(self, "Claude API key", why + "\nThe key is saved anyway.")
+        c.claude.api_key = key
         c.claude.model = self.model.currentText().strip() or MODELS[0]
         c.library_dir = Path(self.library.text().strip() or config.Config().library_dir)
         exp = self.exports.text().strip()
